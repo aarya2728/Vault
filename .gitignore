@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+
+target/
+*.wasm
+*.wasm.*
+
+.env
+.env.local
+.env.setup
+.env.agent-key
+*.log
+agent/data/*.jsonl
+
+.DS_Store
+Thumbs.db
