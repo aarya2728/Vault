@@ -70,6 +70,33 @@ pub struct VaultPilot {
 const DAY_NS: u64 = 86_400_000_000_000;
 const SHARE_PRICE_SCALE: u128 = 1_000_000_000_000_000_000_000_000;
 
+impl Default for VaultPilot {
+    fn default() -> Self {
+        Self {
+            owner: env::current_account_id(),
+            token: env::current_account_id(),
+            agent: env::current_account_id(),
+            agent_enabled: false,
+            paused: true,
+            total_shares: 0,
+            total_assets: 0,
+            idle_assets: 0,
+            deployed_assets: 0,
+            shares: LookupMap::new(StorageKey::Shares),
+            rebalances: Vector::new(StorageKey::Rebalances),
+            policy: Policy {
+                min_move: U128(1),
+                max_per_move: U128(1),
+                daily_cap: U128(1),
+                max_slippage_bps: 0,
+                allowed_destination_assets: Vec::new(),
+            },
+            daily_moved: 0,
+            daily_bucket: 0,
+        }
+    }
+}
+
 #[near]
 impl VaultPilot {
     #[init]
