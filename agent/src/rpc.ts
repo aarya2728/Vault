@@ -1,6 +1,12 @@
 import { Account, JsonRpcProvider } from "near-api-js";
 import type { KeyPairString } from "near-api-js";
-import type { AgentConfig, Policy, RebalanceRecord, VaultSummary } from "./types.js";
+import type {
+  AgentConfig,
+  PendingMove,
+  Policy,
+  RebalanceRecord,
+  VaultSummary,
+} from "./types.js";
 
 export function createProvider(config: AgentConfig): JsonRpcProvider {
   return new JsonRpcProvider({ url: config.rpcUrl });
@@ -33,6 +39,13 @@ export function getSummary(provider: JsonRpcProvider, vault: string): Promise<Va
 
 export function getPolicy(provider: JsonRpcProvider, vault: string): Promise<Policy> {
   return view<Policy>(provider, vault, "get_policy");
+}
+
+export function getPendingMoves(
+  provider: JsonRpcProvider,
+  vault: string,
+): Promise<PendingMove[]> {
+  return view<PendingMove[]>(provider, vault, "get_pending_moves");
 }
 
 export function getRebalances(

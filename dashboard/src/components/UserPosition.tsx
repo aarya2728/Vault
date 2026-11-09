@@ -6,6 +6,7 @@ import {
   explorerTxUrl,
   fetchFtBalance,
   fetchShares,
+  fetchStorageBalance,
   formatAmount,
   parseAmount,
   sharesForAssets,
@@ -14,6 +15,8 @@ import {
 } from "../lib/vault.js";
 
 const GAS = "100000000000000";
+const STORAGE_GAS = "30000000000000";
+const STORAGE_DEPOSIT = "1250000000000000000000";
 
 function transactionHash(result: TransactionResult): string | null {
   const outcome = result as unknown as {
@@ -95,6 +98,13 @@ export function UserPosition({
 
     setPending("deposit");
     try {
+      const vaultStorage = await fetchStorageBalance(summary.token, config.vaultContract);
+      if (!vaultStorage) {
+        throw new Error(
+          `The vault is not storage-registered with ${config.tokenSymbol}. Run the storage_deposit command printed by the deploy script, then retry.`,
+        );
+      }
+
       const result = await callMethod({
         contractId: summary.token,
         methodName: "ft_transfer_call",
@@ -121,6 +131,11 @@ export function UserPosition({
     event.preventDefault();
     setTxError(null);
     setTxHash(null);
+
+    if (!accountId) {
+      setTxError("connect a wallet first");
+      return;
+    }
 
     let assets: bigint;
     try {
@@ -152,6 +167,16 @@ export function UserPosition({
 
     setPending("withdraw");
     try {
+      if (!(await fetchStorageBalance(summary.token, accountId))) {
+        await callMethod({
+          contractId: summary.token,
+          methodName: "storage_deposit",
+          args: { account_id: accountId },
+          gas: STORAGE_GAS,
+          deposit: STORAGE_DEPOSIT,
+        });
+      }
+
       const result = await callMethod({
         contractId: config.vaultContract,
         methodName: "withdraw",
@@ -239,7 +264,9 @@ export function UserPosition({
         <form className="action-card" onSubmit={(event) => void handleWithdraw(event)}>
           <h3>Withdraw</h3>
           <p className="muted small">
-            Burn shares for idle {symbol}. Withdrawals stay open while the vault is paused.
+            Burn shares for idle {symbol}. Withdrawals stay open while the vault is paused. If this
+            account has never held {symbol}, the first withdrawal also registers token storage
+            (0.00125 NEAR).
           </p>
           <div className="field">
             <input

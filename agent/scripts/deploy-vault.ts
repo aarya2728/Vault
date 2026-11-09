@@ -10,6 +10,7 @@ import {
   bool,
   createProvider,
   errorMessage,
+  getStorageBalance,
   getSummary,
   isFullAccess,
   listAccessKeys,
@@ -237,6 +238,18 @@ async function main(): Promise<void> {
     }
   } catch (error) {
     console.log(`could not read get_summary: ${errorMessage(error)}`);
+  }
+
+  try {
+    const storage = await getStorageBalance(provider, tokenAccountId, vaultAccountId);
+    if (!storage) {
+      console.log("");
+      console.log(
+        `WARNING: ${vaultAccountId} is not storage-registered with ${tokenAccountId}; deposits will fail until it is.`,
+      );
+    }
+  } catch (error) {
+    console.log(`could not read token storage_balance_of: ${errorMessage(error)}`);
   }
 
   console.log("");

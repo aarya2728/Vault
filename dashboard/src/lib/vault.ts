@@ -8,6 +8,16 @@ export interface Policy {
   allowed_destination_assets: string[];
 }
 
+export interface PendingMove {
+  id: number;
+  amount: Amount;
+  destination_asset: string;
+  deposit_address: string;
+  min_out: Amount;
+  opened_at_ms: number;
+  status: string;
+}
+
 export interface VaultSummary {
   owner: string;
   token: string;
@@ -20,7 +30,10 @@ export interface VaultSummary {
   deployed_assets: Amount;
   share_price: Amount;
   daily_moved: Amount;
+  daily_remaining: Amount;
   today_bucket: number;
+  last_move_ms: number;
+  pending_move: PendingMove | null;
   policy: Policy;
 }
 
@@ -129,6 +142,18 @@ export function fetchFtBalance(token: string, accountId: string): Promise<string
   return viewAt<string>(token, "ft_balance_of", { account_id: accountId });
 }
 
+export interface StorageBalance {
+  total: string;
+  available: string;
+}
+
+export function fetchStorageBalance(
+  token: string,
+  accountId: string,
+): Promise<StorageBalance | null> {
+  return viewAt<StorageBalance | null>(token, "storage_balance_of", { account_id: accountId });
+}
+
 export function formatAmount(value: Amount, decimals = config.tokenDecimals): string {
   const raw = BigInt(value);
   const scale = 10n ** BigInt(decimals);
@@ -159,14 +184,17 @@ export function shorten(value: string, head = 8, tail = 6): string {
   return `${value.slice(0, head)}...${value.slice(-tail)}`;
 }
 
+export const VIRTUAL_SHARES = 1_000_000n;
+export const VIRTUAL_ASSETS = 1_000_000n;
+
 export function assetsForShares(shares: bigint, totalAssets: bigint, totalShares: bigint): bigint {
   if (totalShares <= 0n) return 0n;
-  return (shares * totalAssets) / totalShares;
+  return (shares * (totalAssets + VIRTUAL_ASSETS)) / (totalShares + VIRTUAL_SHARES);
 }
 
 export function sharesForAssets(assets: bigint, totalAssets: bigint, totalShares: bigint): bigint {
-  if (totalAssets <= 0n || totalShares <= 0n) return 0n;
-  return (assets * totalShares) / totalAssets;
+  if (totalAssets <= 0n) return 0n;
+  return (assets * (totalShares + VIRTUAL_SHARES)) / (totalAssets + VIRTUAL_ASSETS);
 }
 
 export function parseAmount(input: string, decimals = config.tokenDecimals): bigint {

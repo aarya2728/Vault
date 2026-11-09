@@ -227,3 +227,21 @@ export async function getSummary(
   }
   return result as VaultSummary;
 }
+
+export interface StorageBalance {
+  total: string;
+  available: string;
+}
+
+export async function getStorageBalance(
+  provider: JsonRpcProvider,
+  contractId: string,
+  accountId: string,
+): Promise<StorageBalance | null> {
+  const result = await provider.callFunction({
+    contractId,
+    method: "storage_balance_of",
+    args: { account_id: accountId },
+  });
+  return (result as StorageBalance | null) ?? null;
+}

@@ -1,5 +1,5 @@
 import type { VaultSummary } from "../lib/vault.js";
-import { formatAmount, formatSharePrice, formatUsd } from "../lib/vault.js";
+import { formatAmount, formatSharePrice, formatTime, formatUsd } from "../lib/vault.js";
 
 export function VaultStats({ summary }: { summary: VaultSummary }) {
   const cards = [
@@ -11,6 +11,18 @@ export function VaultStats({ summary }: { summary: VaultSummary }) {
       label: "Moved today",
       value: `${formatAmount(summary.daily_moved)} / ${formatAmount(summary.policy.daily_cap)}`,
       hint: "policy daily cap",
+    },
+    {
+      label: "Daily headroom",
+      value: formatAmount(summary.daily_remaining ?? 0),
+      hint: "remaining before the cap",
+    },
+    {
+      label: "Last move",
+      value: summary.last_move_ms ? formatTime(summary.last_move_ms) : "-",
+      hint: summary.pending_move
+        ? `pending: ${summary.pending_move.status}`
+        : "no pending move",
     },
   ];
 

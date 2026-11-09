@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -16,7 +17,19 @@ export type TransactionResult = Awaited<ReturnType<NearWalletBase["signAndSendTr
 const connector = new NearConnector({
   network: config.network === "mainnet" ? "mainnet" : "testnet",
   features: { signAndSendTransaction: true },
+  // The EVM-on-NEAR executor requires a popup, a chain switch, and a sponsored
+  // onboarding transaction. Keep the vault demo on NEAR-native wallets.
+  excludedWallets: ["ethereum-wallets"],
+  logger: {
+    log: (...args: unknown[]) => console.debug("[near-connect]", ...args),
+  },
 });
+
+function describeError(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error) return error;
+  return "Wallet connection failed. Check the popup and try again.";
+}
 
 export interface CallMethodParams {
   contractId: string;
@@ -29,6 +42,7 @@ export interface CallMethodParams {
 interface NearContextValue {
   accountId: string | null;
   connecting: boolean;
+  connectError: string | null;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
   callMethod: (params: CallMethodParams) => Promise<TransactionResult>;
@@ -37,8 +51,15 @@ interface NearContextValue {
 const NearContext = createContext<NearContextValue | null>(null);
 
 export function NearProvider({ children }: { children: ReactNode }) {
-  const [accountId, setAccountId] = useState<string | null>(null);
+  const [accountId, setAccountIdState] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const accountIdRef = useRef<string | null>(null);
+
+  const setAccountId = useCallback((next: string | null) => {
+    accountIdRef.current = next;
+    setAccountIdState(next);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +75,7 @@ export function NearProvider({ children }: { children: ReactNode }) {
 
     const onSignIn = (payload: EventMap["wallet:signIn"]) => {
       setAccountId(payload.accounts[0]?.accountId ?? null);
+      setConnectError(null);
     };
     const onSignOut = () => {
       setAccountId(null);
@@ -71,14 +93,30 @@ export function NearProvider({ children }: { children: ReactNode }) {
 
   const connect = useCallback(async () => {
     setConnecting(true);
+    setConnectError(null);
     try {
       const wallet = await connector.connect();
-      const accounts = await wallet.getAccounts();
-      setAccountId(accounts[0]?.accountId ?? null);
+      let accounts: Awaited<ReturnType<typeof wallet.getAccounts>> = [];
+      try {
+        accounts = await wallet.getAccounts();
+      } catch (error) {
+        console.debug("[near-connect] getAccounts after connect failed", error);
+      }
+      const nextAccountId = accounts[0]?.accountId ?? null;
+      if (nextAccountId) {
+        setAccountId(nextAccountId);
+      } else if (!accountIdRef.current) {
+        throw new Error(
+          "The wallet approved the request but returned no account. Pick a NEAR wallet (Meteor, HOT, Nightly, or MyNearWallet) and try again.",
+        );
+      }
+    } catch (error) {
+      setConnectError(describeError(error));
+      throw error;
     } finally {
       setConnecting(false);
     }
-  }, []);
+  }, [setAccountId]);
 
   const disconnect = useCallback(async () => {
     try {
@@ -86,7 +124,7 @@ export function NearProvider({ children }: { children: ReactNode }) {
     } finally {
       setAccountId(null);
     }
-  }, []);
+  }, [setAccountId]);
 
   const callMethod = useCallback(
     async ({
@@ -111,8 +149,8 @@ export function NearProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ accountId, connecting, connect, disconnect, callMethod }),
-    [accountId, connecting, connect, disconnect, callMethod],
+    () => ({ accountId, connecting, connectError, connect, disconnect, callMethod }),
+    [accountId, connecting, connectError, connect, disconnect, callMethod],
   );
 
   return <NearContext.Provider value={value}>{children}</NearContext.Provider>;

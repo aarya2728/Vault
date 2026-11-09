@@ -8,6 +8,16 @@ export interface Policy {
   allowed_destination_assets: string[];
 }
 
+export interface PendingMove {
+  id: number;
+  amount: Amount;
+  destination_asset: string;
+  deposit_address: string;
+  min_out: Amount;
+  opened_at_ms: number;
+  status: string;
+}
+
 export interface VaultSummary {
   owner: string;
   token: string;
@@ -20,7 +30,10 @@ export interface VaultSummary {
   deployed_assets: Amount;
   share_price: Amount;
   daily_moved: Amount;
+  daily_remaining: Amount;
   today_bucket: number;
+  last_move_ms: number;
+  pending_move: PendingMove | null;
   policy: Policy;
 }
 

@@ -94,8 +94,17 @@ Accounting: `total_assets = idle_assets + deployed_assets`. Yield is recognized 
 the position is closed (`rebalance_in` reads the real FT balance). The agent cannot inflate
 NAV while a position is open. `rebalance_in` refuses to close unless the FT balance increased
 by at least `deployed_assets`, so neither an empty close nor a 1-yocto donation can silently
-write off a deployed position. A real loss requires the owner to inspect and call
-`emergency_reset_position`.
+write off a deployed position. The amount is read from the token contract, not reported by
+the agent. A real loss requires the owner to inspect and call `emergency_reset_position`.
+
+Share math uses ERC-4626-style virtual shares and assets plus a minimum first deposit. This
+keeps the exchange rate non-zero and makes donation-based share inflation expensive even
+before the first real deposit. The virtual offsets are mirrored in the dashboard so previews
+match the contract.
+
+`withdraw` deliberately has **no pause check**: the pause switch stops deposits and agent
+moves, while users can always exit against idle liquidity. The owner escape path is
+`pause(true)` followed by per-user withdrawals, not a privileged transfer of vault assets.
 
 ### How the agent decides
 
@@ -119,8 +128,9 @@ policy, and logs the whole decision as JSON. In `DRY_RUN=true` it stops before s
 | Agent passes a malicious deposit address | Caps bound each move. The contract cannot verify the quote; this is why the design is **not trustless**. |
 | Bad 1Click quote | The agent requests `slippageTolerance` bounded by on-chain `max_slippage_bps`, records `min_out`, and logs the full quote. The contract cannot verify it. |
 | Withdrawal `ft_transfer` fails | The `on_withdraw` callback restores the burned shares and accounting. |
-| Rebalance `ft_transfer` fails after accounting moves | `emergency_reset_position` (owner-only) re-bases `deployed_assets` on the idle balance. It does not move funds. |
+| Rebalance `ft_transfer` fails after accounting moves | The `on_rebalance_out` callback restores idle/deployed/daily accounting automatically. `emergency_reset_position` stays as an owner-only fallback for a callback that never executed. It does not move funds. |
 | Premature `rebalance_in` | The callback requires `actual - idle >= deployed_assets`, so an empty close or a tiny donation cannot write off a position. |
+| In-flight move ambiguity | `rebalance_out` records a `PendingMove` with status `funding`, flips to `open` after the transfer succeeds, and clears it on settle or reset. `get_pending_moves` exposes it to the agent and dashboard. |
 | Owner key lost | Users can still withdraw idle liquidity; no owner action is needed for withdrawals. Policy changes and agent rotation require the owner. |
 | Contract bug | Not audited. Do not hold real funds beyond a small demo amount. |
 
@@ -238,11 +248,14 @@ npm install
 npm run dev
 ```
 
-Connect a NEAR wallet from the top bar to see your balance, shares, and position value.
-The **Deposit** form calls `ft_transfer_call` on the vault token with the vault as receiver;
-the **Withdraw** form burns shares through the vault. Your wallet must already be
-storage-registered with the token to receive withdrawals (the faucet/demo account normally
-is). The dashboard still shows balances, policy, and rebalance history before you connect.
+Connect a NEAR-native wallet (Meteor, HOT, Nightly, or MyNearWallet) from the top bar to see
+your balance, shares, and position value. The **Deposit** form calls `ft_transfer_call` on
+the vault token with the vault as receiver; the **Withdraw** form burns shares through the
+vault. If the connected account has never held the token, the dashboard first calls
+`storage_deposit` on the token (0.00125 NEAR) so the withdrawal can land. The EVM/MetaMask
+connector is intentionally excluded: it depends on a popup, a chain switch, and a sponsored
+onboarding transaction that obscure the NEAR-native flow. The dashboard still shows balances,
+policy, and rebalance history before you connect.
 
 ## Demo path
 
@@ -269,14 +282,19 @@ capped agent, visible reasoning, revocable key.
 - The setup script leaves the agent account with a function-call key only. The key and its
   allowance cannot be changed in place without a full-access key; create a new
   `AGENT_ACCOUNT` and call `set_agent` instead.
-- If `ft_transfer` fails after `deployed_assets` is set, the owner can call
-  `emergency_reset_position` to re-base accounting on the idle balance. It does not move
-  funds; verify the token balance and deposit address first. This is an owner-trusted
-  escape hatch, not a trustless recovery path.
-- The dashboard covers user deposit/withdraw; owner actions (pause, `set_policy`,
-  `set_agent`, key rotation) still use `near-cli`. There is no admin UI by design.
-- Wallet actions need the user to be storage-registered with the vault token before a
-  withdrawal can land. Fund the wallet from the faucet first in the demo.
+- The `on_rebalance_out` callback normally reverts accounting when `ft_transfer` fails. If
+  the callback itself never executes, the owner can call `emergency_reset_position` to
+  re-base accounting on the idle balance. It does not move funds; verify the token balance
+  and deposit address first. This is an owner-trusted escape hatch, not a trustless recovery
+  path.
+- The first deposit must meet `MIN_FIRST_DEPOSIT` (1,000 token units). Virtual share/asset
+  offsets reduce donation inflation but do not eliminate rounding; the contract rejects
+  zero-share deposits.
+- The dashboard covers user deposit/withdraw and auto-registers token storage; owner actions
+  (pause, `set_policy`, `set_agent`, key rotation) still use `near-cli`. There is no admin UI
+  by design.
+- The on-chain policy verifies the return amount from the token balance but cannot verify
+  the off-chain 1Click venue leg. A real venue integration is future work.
 
 ## References
 
