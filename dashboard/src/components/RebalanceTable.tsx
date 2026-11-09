@@ -1,5 +1,53 @@
 import type { RebalanceRecord } from "../lib/vault.js";
-import { formatAmount, formatTime, shorten } from "../lib/vault.js";
+import {
+  formatAmount,
+  formatTime,
+  shorten,
+  NEAR_INTENTS_EXPLORER_TX,
+} from "../lib/vault.js";
+
+function renderReason(reason: string) {
+  if (!reason) return "-";
+  const parts = reason.split(/(intents:[a-zA-Z0-9_,]+|tx:[a-zA-Z0-9]+)/g);
+  return (
+    <span>
+      {parts.map((part, index) => {
+        if (part.startsWith("intents:")) {
+          const hashes = part.slice("intents:".length).split(",");
+          return (
+            <span key={`intents-${index}`}>
+              intents:
+              {hashes.map((h, hashIndex) => (
+                <span key={h}>
+                  {hashIndex > 0 ? "," : ""}
+                  <code className="intent-hash-inline" title={h}>
+                    {shorten(h, 6, 4)}
+                  </code>
+                </span>
+              ))}
+            </span>
+          );
+        }
+        if (part.startsWith("tx:")) {
+          const hash = part.slice("tx:".length);
+          return (
+            <a
+              key={`tx-${index}`}
+              href={`${NEAR_INTENTS_EXPLORER_TX}/${hash}`}
+              target="_blank"
+              rel="noreferrer"
+              className="intent-link-inline"
+              title={`View NEAR Intents transaction ${hash}`}
+            >
+              [tx:{shorten(hash, 6, 4)} ↗]
+            </a>
+          );
+        }
+        return <span key={`text-${index}`}>{part}</span>;
+      })}
+    </span>
+  );
+}
 
 export function RebalanceTable({ records }: { records: RebalanceRecord[] }) {
   const rows = [...records].reverse();
@@ -43,7 +91,7 @@ export function RebalanceTable({ records }: { records: RebalanceRecord[] }) {
                     {record.deposit_address ? shorten(record.deposit_address, 10, 6) : "-"}
                   </td>
                   <td className="reason" title={record.reason}>
-                    {record.reason || "-"}
+                    {renderReason(record.reason)}
                   </td>
                 </tr>
               ))}

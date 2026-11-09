@@ -55,7 +55,108 @@ export const config = {
   tokenSymbol: import.meta.env.VITE_TOKEN_SYMBOL ?? "USDC",
   tokenDecimals: Number(import.meta.env.VITE_TOKEN_DECIMALS ?? 6),
   network: import.meta.env.VITE_NEAR_NETWORK ?? "testnet",
+  oneClickBaseUrl: import.meta.env.VITE_ONECLICK_BASE_URL ?? "https://1click.chaindefuser.com",
+  agentLogUrl: import.meta.env.VITE_AGENT_LOG_URL ?? "",
 };
+
+export interface ChainTransactionDetails {
+  hash: string;
+  explorerUrl?: string;
+}
+
+export interface OneClickStatus {
+  status:
+    | "KNOWN_DEPOSIT_TX"
+    | "PENDING_DEPOSIT"
+    | "INCOMPLETE_DEPOSIT"
+    | "PROCESSING"
+    | "SUCCESS"
+    | "REFUNDED"
+    | "FAILED";
+  updatedAt?: string;
+  swapDetails?: {
+    intentHashes?: string[];
+    nearTxHashes?: string[];
+    originChainTxHashes?: Array<ChainTransactionDetails | string>;
+    destinationChainTxHashes?: Array<ChainTransactionDetails | string>;
+    amountIn?: string;
+    amountInFormatted?: string;
+    amountOut?: string;
+    amountOutFormatted?: string;
+    refundedAmount?: string;
+    refundedAmountFormatted?: string;
+  };
+}
+
+export const ONE_CLICK_DRY_RECIPIENT = "0x1111111111111111111111111111111111111111";
+export const ONE_CLICK_DRY_REFUND_TO = "wrap.near";
+export const NEAR_INTENTS_EXPLORER_TX = "https://explorer.near-intents.org/transactions";
+
+export interface OneClickQuote {
+  depositAddress?: string;
+  amountIn: string;
+  amountInFormatted: string;
+  amountInUsd: string;
+  minAmountIn: string;
+  amountOut: string;
+  amountOutFormatted: string;
+  amountOutUsd: string;
+  minAmountOut: string;
+  timeEstimate?: number;
+}
+
+export interface OneClickQuoteResult {
+  correlationId: string;
+  timestamp: string;
+  quote: OneClickQuote;
+}
+
+export async function fetchOneClickStatus(depositAddress: string): Promise<OneClickStatus> {
+  const url = `${config.oneClickBaseUrl}/v0/status?depositAddress=${encodeURIComponent(depositAddress)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`1Click status returned HTTP ${res.status}`);
+  }
+  return res.json() as Promise<OneClickStatus>;
+}
+
+export async function fetchOneClickQuote(params: {
+  amount: string;
+  originAsset: string;
+  destinationAsset: string;
+  recipient?: string;
+  slippageTolerance?: number;
+}): Promise<OneClickQuoteResult> {
+  const deadline = new Date(Date.now() + 3 * 60 * 1000).toISOString();
+  const url = `${config.oneClickBaseUrl}/v0/quote`;
+  const body = {
+    dry: true,
+    swapType: "EXACT_INPUT",
+    slippageTolerance: params.slippageTolerance ?? 100,
+    originAsset: params.originAsset,
+    depositType: "ORIGIN_CHAIN",
+    destinationAsset: params.destinationAsset,
+    amount: params.amount,
+    recipient: params.recipient ?? ONE_CLICK_DRY_RECIPIENT,
+    recipientType: "DESTINATION_CHAIN",
+    refundTo:
+      config.network === "mainnet" && config.vaultContract
+        ? config.vaultContract
+        : ONE_CLICK_DRY_REFUND_TO,
+    refundType: "ORIGIN_CHAIN",
+    deadline,
+  };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`1Click quote error (${res.status}): ${text.slice(0, 150)}`);
+  }
+  return res.json() as Promise<OneClickQuoteResult>;
+}
 
 interface RpcResponse {
   result?: {

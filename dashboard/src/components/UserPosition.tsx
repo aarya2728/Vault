@@ -29,9 +29,11 @@ function transactionHash(result: TransactionResult): string | null {
 export function UserPosition({
   summary,
   onRefreshed,
+  demo = false,
 }: {
   summary: VaultSummary;
   onRefreshed: () => void;
+  demo?: boolean;
 }) {
   const { accountId, callMethod } = useNear();
   const [tokenBalance, setTokenBalance] = useState<bigint | null>(null);
@@ -45,6 +47,13 @@ export function UserPosition({
   const [withdrawInput, setWithdrawInput] = useState("");
 
   const load = useCallback(async () => {
+    if (demo) {
+      setTokenBalance(18_420_000_000n);
+      setShares(75_000_000_000n);
+      setReadError(null);
+      setLoading(false);
+      return;
+    }
     if (!accountId) return;
     setLoading(true);
     try {
@@ -60,7 +69,7 @@ export function UserPosition({
     } finally {
       setLoading(false);
     }
-  }, [accountId, summary.token]);
+  }, [accountId, demo, summary.token]);
 
   useEffect(() => {
     void load();
@@ -158,6 +167,14 @@ export function UserPosition({
       return;
     }
 
+    const idleAssets = BigInt(summary.idle_assets);
+    if (assets > idleAssets) {
+      setTxError(
+        `Withdrawal of ${formatAmount(assets)} ${config.tokenSymbol} exceeds available idle liquidity (${formatAmount(idleAssets)} ${config.tokenSymbol}). Remaining capital is deployed in cross-chain rebalance. You can withdraw up to ${formatAmount(idleAssets)} immediately, or wait for settlement.`,
+      );
+      return;
+    }
+
     const requested = assets >= positionValue ? shares : sharesForAssets(assets, totalAssets, totalShares);
     const sharesToBurn = requested > shares ? shares : requested;
     if (sharesToBurn <= 0n) {
@@ -196,17 +213,36 @@ export function UserPosition({
   }
 
   const symbol = config.tokenSymbol;
-  const depositBlocked = summary.paused || pending !== null;
-  const withdrawBlocked = pending !== null || shares === null || shares <= 0n;
+  const idleAssets = BigInt(summary.idle_assets);
+  const deployedAssets = BigInt(summary.deployed_assets);
+  const totalCapital = idleAssets + deployedAssets;
+  const idlePct = totalCapital > 0n ? Number((idleAssets * 100n) / totalCapital) : 100;
+  const maxInstant = positionValue < idleAssets ? positionValue : idleAssets;
+  const depositBlocked = demo || summary.paused || pending !== null;
+  const withdrawBlocked =
+    demo || pending !== null || shares === null || shares <= 0n;
 
   return (
     <section className="panel">
       <header className="panel-header">
         <h2>Your position</h2>
         <span className="muted">
-          {loading ? "reading..." : accountId ? shorten(accountId, 12, 8) : ""}
+          {demo
+            ? "demo position"
+            : loading
+            ? "reading..."
+            : accountId
+            ? shorten(accountId, 12, 8)
+            : ""}
         </span>
       </header>
+
+      {demo && (
+        <p className="muted small demo-note">
+          Sample LP position. Connect a wallet and configure a vault contract to deposit or
+          withdraw for real.
+        </p>
+      )}
 
       <div className="position-grid">
         <div>
@@ -223,7 +259,31 @@ export function UserPosition({
         </div>
       </div>
 
-      {readError && <p className="form-error">Read failed: {readError}</p>}
+      <div className="capital-split">
+        <div
+          className="capital-split-bar"
+          role="img"
+          aria-label={`${idlePct}% idle, ${100 - idlePct}% deployed`}
+        >
+          <span className="capital-split-idle" style={{ width: `${idlePct}%` }} />
+        </div>
+        <div className="capital-split-legend">
+          <span>
+            <span className="split-dot split-dot-idle" /> Idle{" "}
+            <strong>
+              {formatAmount(idleAssets)} {symbol}
+            </strong>
+          </span>
+          <span>
+            <span className="split-dot split-dot-deployed" /> Deployed cross-chain{" "}
+            <strong>
+              {formatAmount(deployedAssets)} {symbol}
+            </strong>
+          </span>
+        </div>
+      </div>
+
+      {readError && !demo && <p className="form-error">Read failed: {readError}</p>}
 
       <div className="action-grid">
         <form className="action-card" onSubmit={(event) => void handleDeposit(event)}>
@@ -275,17 +335,33 @@ export function UserPosition({
               placeholder="0.00"
               value={withdrawInput}
               onChange={(event) => setWithdrawInput(event.target.value)}
-              disabled={pending !== null}
+              disabled={demo || pending !== null}
             />
             <button
               type="button"
               className="button button-ghost"
+              onClick={() => setWithdrawInput(formatAmount(maxInstant))}
+              disabled={demo || pending !== null || maxInstant === 0n}
+              title="Withdraw up to immediately available idle liquidity"
+            >
+              Instant Max
+            </button>
+            <button
+              type="button"
+              className="button button-ghost"
               onClick={() => setWithdrawInput(formatAmount(positionValue))}
-              disabled={pending !== null || positionValue === 0n}
+              disabled={demo || pending !== null || positionValue === 0n}
             >
               Max
             </button>
           </div>
+          {idleAssets < positionValue && (
+            <p className="muted small" style={{ color: "var(--color-warn, #e5a93c)" }}>
+              Notice: {formatAmount(idleAssets)} {symbol} currently idle for instant exit. (
+              {formatAmount(deployedAssets)} {symbol} deployed across the vault&apos;s cross-chain
+              position).
+            </p>
+          )}
           <button
             type="submit"
             className="button button-primary"

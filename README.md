@@ -17,10 +17,13 @@ at the account level.
 | --- | --- |
 | NEAR vault contract: shares, deposits, withdrawals, policy, pause | Implemented in `contracts/` |
 | Agent with function-call key, hourly loop, strategy, reasoning log | Implemented in `agent/` |
-| 1Click quote + status client (real API) | Implemented in `agent/src/intents.ts` |
+| 1Click quote, status polling & return quote client (real API) | Implemented in `agent/src/intents.ts` |
 | Outbound cross-chain swap via 1Click `ORIGIN_CHAIN` deposit | Wired; requires mainnet and a funded vault |
-| External yield venue | **Simulated** by default (`agent/src/venue.ts`) |
-| Dashboard: balances, policy, history, wallet deposit/withdraw | Implemented in `dashboard/` |
+| Outbound leg & settlement lifecycle | Real 1Click status polling (`outbound_pending` &rarr; `outbound_completed` &rarr; `awaiting_return` &rarr; `settling` via on-chain FT balance). The return leg is a real priced quote plus a treasury-funded demo transfer; no live venue adapter yet. |
+| Dashboard: balances, policy, history, wallet deposit/withdraw | Implemented in `dashboard/` with 3D NEAR hub topology, agent reasoning terminal, guardrail gauges, 1Click pipeline tracker, live quote simulator, owner governance & instant exit guard |
+| Dashboard resilience | Labeled demo mode renders sample vault state when `VITE_VAULT_CONTRACT` is unset or the live read fails; real 1Click quotes still run |
+| Agent observability | JSONL audit log plus a read-only `/api/history` endpoint (`npm run history`) for the dashboard decision stream |
+| Agent self-protection | Multi-venue ranking + circuit breaker that self-pauses new entries after 3 consecutive anomalous quote/gas cycles |
 
 NEAR Intents has **no testnet**. Quotes and swaps use mainnet liquidity. The default config
 therefore runs the agent in `DRY_RUN=true` against testnet vault state, and fetches real
@@ -67,10 +70,15 @@ vault-pilot/
 │   ├── src/intents.ts         # 1Click quote/status client
 │   ├── src/wallet.ts          # function-call key scope check
 │   ├── src/strategy.ts        # spread + threshold logic
-│   ├── src/venue.ts           # external venue adapter (mock default)
+│   ├── src/venue.ts           # multi-venue ranking + yield projections (modeled)
+│   ├── src/history-server.ts  # read-only /api/history endpoint over the JSONL log
 │   ├── src/mock-return.ts     # treasury return helper for the demo
 │   └── src/rpc.ts             # NEAR view calls + gas price
 ├── dashboard/                 # Vite + React dashboard + wallet deposit/withdraw
+│   ├── src/lib/demo.ts        # labeled demo vault state + reasoning samples
+│   ├── src/components/NetworkBackground.tsx  # Three.js topology backdrop
+│   ├── src/components/DecisionStream.tsx     # live/demo agent terminal
+│   └── src/components/SetupBanner.tsx        # missing-contract guidance
 └── .github/workflows/ci.yml   # tests, wasm build, typecheck, dashboard build
 ```
 
@@ -89,6 +97,11 @@ It cannot verify the off-chain quote on-chain, so the trust model is **bounded, 
 trustless**: a compromised agent can move at most `max_per_move` per transaction and
 `daily_cap` per day before the owner pauses or deletes the key. Say it that way in the
 demo; do not call it trustless.
+
+Every recorded action emits a NEP-297-shaped `EVENT_JSON` log with `standard: "vaultpilot"`,
+`version`, `event`, and `data`. The event names cover `rebalance_out`, `rebalance_in`,
+`set_policy`, `set_agent`, `pause`, `emergency_reset`, and the revert callbacks, so a
+lightweight indexer can follow vault state without polling every block.
 
 Accounting: `total_assets = idle_assets + deployed_assets`. Yield is recognized only when
 the position is closed (`rebalance_in` reads the real FT balance). The agent cannot inflate
@@ -112,9 +125,20 @@ moves, while users can always exit against idle liquidity. The owner escape path
 quoteCostBps        = (amountInUsd - amountOutUsd) / amountInUsd * 10_000
 gasCostBps          = gasUsd / amountInUsd * 10_000
 annualizedCostBps   = (quoteCostBps + gasCostBps) * 365 / HOLD_DAYS
-netSpreadBps        = externalApyBps - nearApyBps - annualizedCostBps
+venueNetApyBps      = externalVenueApyBps - modeledRouteCostBps
+netSpreadBps        = selectedExternalApyBps - nearApyBps - annualizedCostBps
 enter if netSpreadBps > MIN_SPREAD_BPS and the on-chain policy allows the move
 ```
+
+`venue.ts` ranks five modeled external venues around `EXTERNAL_APY_BPS` and records the
+selected venue, route-cost estimate, and full ranking in each decision log. The rates are
+modeled assumptions, not live protocol calls; the actual 1Click quote cost is still read
+from the live API.
+
+If quote cost exceeds `ANOMALY_COST_BPS` or gas cost exceeds `ANOMALY_GAS_COST_BPS` for
+`CIRCUIT_BREAKER_THRESHOLD` consecutive cycles, the agent trips its own circuit breaker and
+stops opening new positions for `CIRCUIT_BREAKER_COOLDOWN_MS`. Open positions continue their
+normal settlement loop, so the breaker cannot strand funds.
 
 The agent reads `get_summary()` every cycle, caps the amount against `max_per_move` and the
 remaining daily cap, requests a real 1Click quote with `slippageTolerance` bounded by the
@@ -131,6 +155,7 @@ policy, and logs the whole decision as JSON. In `DRY_RUN=true` it stops before s
 | Rebalance `ft_transfer` fails after accounting moves | The `on_rebalance_out` callback restores idle/deployed/daily accounting automatically. `emergency_reset_position` stays as an owner-only fallback for a callback that never executed. It does not move funds. |
 | Premature `rebalance_in` | The callback requires `actual - idle >= deployed_assets`, so an empty close or a tiny donation cannot write off a position. |
 | In-flight move ambiguity | `rebalance_out` records a `PendingMove` with status `funding`, flips to `open` after the transfer succeeds, and clears it on settle or reset. `get_pending_moves` exposes it to the agent and dashboard. |
+| 1Click reports `FAILED` / `REFUNDED` after funds left the vault | The agent re-reads on-chain `deployed_assets`. If still positive, it keeps the position and waits for the refunded FT to land; if the transfer callback already reverted, it clears local state. It does not blindly drop tracking. |
 | Owner key lost | Users can still withdraw idle liquidity; no owner action is needed for withdrawals. Policy changes and agent rotation require the owner. |
 | Contract bug | Not audited. Do not hold real funds beyond a small demo amount. |
 
@@ -257,6 +282,23 @@ connector is intentionally excluded: it depends on a popup, a chain switch, and 
 onboarding transaction that obscure the NEAR-native flow. The dashboard still shows balances,
 policy, and rebalance history before you connect.
 
+If `VITE_VAULT_CONTRACT` is unset (or the configured account cannot be read), the dashboard
+enters a clearly labeled **demo mode** with sample vault state, simulated solver telemetry,
+a demo governance surface, and a setup banner. It does not pretend the data is live; the
+1Click quote inspector still calls the real mainnet API. This keeps the GitHub Pages demo
+useful before a vault is deployed.
+
+The **Agent Reasoning Stream** is a terminal-style view of the decision log. It ships with a
+bundled demo feed. To stream the live agent log, run:
+
+```bash
+cd agent
+npm run history   # serves http://127.0.0.1:8787/api/history from LOG_FILE
+```
+
+Then set `VITE_AGENT_LOG_URL=http://127.0.0.1:8787/api/history` in `dashboard/.env`. The
+endpoint is read-only and serves the append-only JSONL audit log; it is not a SQLite store.
+
 ## Demo path
 
 Two honest options:
@@ -276,6 +318,13 @@ capped agent, visible reasoning, revocable key.
 - No testnet for NEAR Intents; mainnet swaps need real funds.
 - The on-chain policy cannot verify a 1Click quote signature. Caps bound the damage.
 - The external venue is simulated; a real venue needs its own deposit/withdraw integration.
+  Multi-venue APYs are modeled around `EXTERNAL_APY_BPS`, not live protocol calls.
+- The circuit breaker is an off-chain self-protection mechanism. It stops new entries but is
+  not an on-chain guarantee; the owner pause and policy caps remain the enforceable bounds.
+- Policy changes still apply immediately through `set_policy`; there is no on-chain timelock
+  or grace period yet. Owner actions emit NEP-297-shaped `EVENT_JSON` logs for indexing.
+- The decision-stream endpoint serves the append-only JSONL audit log, not a SQLite database.
+  The demo feed is bundled for GitHub Pages because a static site cannot reach `localhost`.
 - 1Click deposit addresses are quote-specific, so the agent is trusted to pass a valid one.
 - `cargo-near` and a Rust toolchain are required to build the contract; they are not
   installed in this scaffold by default. The `ci` workflow builds and tests it on push.

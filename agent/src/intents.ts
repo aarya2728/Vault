@@ -89,4 +89,37 @@ export function submitDeposit(
   });
 }
 
+/**
+ * Request a return quote: swap destination asset back to origin asset,
+ * with the vault contract as the recipient on the origin chain.
+ * Always uses dry=true since the agent cannot deposit on the destination chain
+ * without Chain Signatures; this proves the return path exists and is priced.
+ */
+export function requestReturnQuote(
+  config: AgentConfig,
+  amount: bigint,
+  slippageBps: number = config.slippageBps,
+): Promise<QuoteResponse> {
+  const deadline = new Date(Date.now() + 3 * 60 * 1000).toISOString();
+  const body = {
+    dry: true,
+    swapType: "EXACT_INPUT",
+    slippageTolerance: slippageBps,
+    originAsset: config.destinationAsset,
+    depositType: "ORIGIN_CHAIN",
+    destinationAsset: config.originAsset,
+    amount: amount.toString(),
+    recipient: config.vaultContract,
+    recipientType: "DESTINATION_CHAIN",
+    refundTo: config.destinationRecipient,
+    refundType: "ORIGIN_CHAIN",
+    deadline,
+  };
+
+  return request<QuoteResponse>(config, "/v0/quote", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export { OneClickError };

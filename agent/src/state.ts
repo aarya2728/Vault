@@ -46,5 +46,7 @@ function isPosition(value: unknown): value is PositionState {
     typeof p.quoteTimestamp === "string" &&
     typeof p.amountInUsd === "string" &&
     typeof p.amountOutUsd === "string"
+    // phase, statusPollCount, outboundSwapDetails, returnQuote are optional
+    // for backward compatibility with pre-v2 state files
   );
 }

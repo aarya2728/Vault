@@ -1,5 +1,11 @@
 export type Amount = string | number;
 
+export type PositionPhase =
+  | "outbound_pending"    // rebalance_out done, polling 1Click status
+  | "outbound_completed"  // 1Click confirmed the outbound swap succeeded
+  | "awaiting_return"     // hold period elapsed, waiting for tokens to return to vault
+  | "settling";           // tokens back in vault, ready for rebalance_in
+
 export interface Policy {
   min_move: Amount;
   max_per_move: Amount;
@@ -123,6 +129,27 @@ export interface StatusResponse {
   };
 }
 
+export interface OutboundSwapDetails {
+  intentHashes?: string[];
+  nearTxHashes?: string[];
+  originChainTxHashes?: string[];
+  destinationChainTxHashes?: string[];
+  amountIn?: string;
+  amountInFormatted?: string;
+  amountOut?: string;
+  amountOutFormatted?: string;
+  refundedAmount?: string;
+  refundedAmountFormatted?: string;
+}
+
+export interface ReturnQuoteInfo {
+  depositAddress: string;
+  correlationId: string;
+  amountOut: string;
+  minAmountOut: string;
+  timestamp: string;
+}
+
 export interface PositionState {
   depositAddress: string;
   destinationAsset: string;
@@ -134,6 +161,14 @@ export interface PositionState {
   quoteTimestamp: string;
   amountInUsd: string;
   amountOutUsd: string;
+  /** Phase in the real settlement lifecycle. Defaults to "outbound_pending" for backward compat. */
+  phase?: PositionPhase;
+  /** Number of times 1Click status has been polled for the outbound swap. */
+  statusPollCount?: number;
+  /** Swap details populated when the outbound 1Click swap succeeds. */
+  outboundSwapDetails?: OutboundSwapDetails;
+  /** Return quote info populated when the return path is computed. */
+  returnQuote?: ReturnQuoteInfo;
 }
 
 export interface AgentState {
@@ -141,6 +176,12 @@ export interface AgentState {
   lastRunMs: number | null;
   lastAction: string | null;
   position: PositionState | null;
+  /** Consecutive abnormal quote/gas observations. Reset by a normal cycle. */
+  anomalyStreak?: number;
+  /** When the self-protective circuit breaker tripped (ms since epoch). */
+  breakerTrippedAtMs?: number | null;
+  /** Human-readable reason for the last circuit-breaker trip. */
+  breakerReason?: string | null;
 }
 
 export interface AgentConfig {
@@ -172,6 +213,18 @@ export interface AgentConfig {
   mockYieldBps: number;
   logFile: string;
   stateFile: string;
+  /** How often to poll 1Click status during outbound_pending phase (ms). */
+  statusPollIntervalMs: number;
+  /** Max status polls before logging a timeout warning. */
+  statusPollMaxRetries: number;
+  /** Consecutive abnormal cycles required to trip the circuit breaker. */
+  circuitBreakerThreshold: number;
+  /** How long the breaker stays open before the agent self-resumes (ms). */
+  circuitBreakerCooldownMs: number;
+  /** Quote/route cost above this is considered anomalous (bps). */
+  anomalyCostBps: number;
+  /** Gas cost above this is considered anomalous (bps). */
+  anomalyGasCostBps: number;
 }
 
 export interface StrategyInput {

@@ -101,5 +101,11 @@ export function loadConfig(): AgentConfig {
     mockYieldBps: integer("MOCK_YIELD_BPS", 100),
     logFile: resolve(process.cwd(), optional("LOG_FILE", "data/rebalances.jsonl")),
     stateFile: resolve(process.cwd(), optional("STATE_FILE", "data/state.json")),
+    statusPollIntervalMs: integer("STATUS_POLL_INTERVAL_MS", 30_000),
+    statusPollMaxRetries: integer("STATUS_POLL_MAX_RETRIES", 120),
+    circuitBreakerThreshold: Math.max(1, integer("CIRCUIT_BREAKER_THRESHOLD", 3)),
+    circuitBreakerCooldownMs: integer("CIRCUIT_BREAKER_COOLDOWN_MS", 21_600_000),
+    anomalyCostBps: integer("ANOMALY_COST_BPS", 350),
+    anomalyGasCostBps: integer("ANOMALY_GAS_COST_BPS", 150),
   };
 }
