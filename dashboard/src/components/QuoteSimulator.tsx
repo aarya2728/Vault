@@ -47,6 +47,8 @@ export function QuoteSimulator({ summary }: { summary: VaultSummary }) {
     }
   }
 
+  const [showPayload, setShowPayload] = useState(false);
+
   // Evaluate policy compliance
   let parsedAmount = 0n;
   try {
@@ -67,6 +69,38 @@ export function QuoteSimulator({ summary }: { summary: VaultSummary }) {
   const passesAsset = summary.policy.allowed_destination_assets.includes(destinationAsset);
   const allPolicyPass =
     passesMin && passesMax && passesDaily && passesLiquidity && passesAsset;
+
+  // Strategy Spread Formula Calculation
+  const externalApyBps = 1200; // 12.0%
+  const nearApyBps = 450; // 4.5%
+  const minSpreadBps = 150; // 1.5%
+  const holdDays = 30;
+
+  let costBps = 15; // default estimate
+  if (quoteResult?.quote?.amountInUsd && quoteResult?.quote?.amountOutUsd) {
+    const inUsd = parseFloat(quoteResult.quote.amountInUsd);
+    const outUsd = parseFloat(quoteResult.quote.amountOutUsd);
+    if (inUsd > 0 && outUsd > 0) {
+      costBps = Math.max(0, Math.round(((inUsd - outUsd) / inUsd) * 10000));
+    }
+  }
+  const annualizedCostBps = Math.round((costBps * 365) / holdDays);
+  const netSpreadBps = externalApyBps - nearApyBps - annualizedCostBps;
+  const shouldEnter = allPolicyPass && netSpreadBps >= minSpreadBps;
+
+  const mockPayload = {
+    contractId: config.vaultContract || "vault.near",
+    methodName: "rebalance_out",
+    args: {
+      amount: parsedAmount.toString(),
+      destination_asset: destinationAsset,
+      deposit_address: quoteResult?.quote?.depositAddress || "1click-solver-deposit.near",
+      min_out: quoteResult?.quote?.minAmountOut || parsedAmount.toString(),
+      reason: `spread ${netSpreadBps}bps >= ${minSpreadBps}bps; apy ${externalApyBps} vs ${nearApyBps}`,
+    },
+    gas: "100000000000000",
+    deposit: "0",
+  };
 
   return (
     <section className="panel">
@@ -218,6 +252,59 @@ export function QuoteSimulator({ summary }: { summary: VaultSummary }) {
           <p className="muted small" style={{ marginTop: "0.5rem" }}>
             Correlation ID: <code>{quoteResult.correlationId}</code> &bull; Solver quotes are cryptographically signed by Chaindefuser.
           </p>
+
+          {/* Strategy Formula Inspector */}
+          <div className="strategy-decision-box">
+            <div className="decision-header">
+              <span className="text-xs font-mono uppercase text-gray-400">Autonomous Agent Strategy Formula</span>
+              <span className={`pill ${shouldEnter ? "pill-ok" : "pill-warn"}`}>
+                {shouldEnter ? "DECISION: ENTER POSITION" : "DECISION: HOLD POSITION"}
+              </span>
+            </div>
+
+            <div className="formula-display">
+              <code>
+                Net Spread ({netSpreadBps} bps) = External APY ({externalApyBps} bps) - NEAR APY ({nearApyBps} bps) - Annualized Cost ({annualizedCostBps} bps)
+              </code>
+            </div>
+
+            <div className="decision-metrics-row">
+              <div>
+                <span className="stat-label">Gross Spread</span>
+                <strong>+{externalApyBps - nearApyBps} bps (+{( (externalApyBps - nearApyBps) / 100).toFixed(1)}%)</strong>
+              </div>
+              <div>
+                <span className="stat-label">One-Way Swap Cost</span>
+                <span className="mono">{costBps} bps</span>
+              </div>
+              <div>
+                <span className="stat-label">Required Min Spread</span>
+                <span className="mono">{minSpreadBps} bps</span>
+              </div>
+              <div>
+                <span className="stat-label">Calculated Net Spread</span>
+                <strong className={netSpreadBps >= minSpreadBps ? "text-emerald-400 font-mono" : "text-amber-400 font-mono"}>
+                  {netSpreadBps} bps ({netSpreadBps >= minSpreadBps ? "Spread Cleared" : "Too Low"})
+                </strong>
+              </div>
+            </div>
+
+            <div style={{ marginTop: "1rem" }}>
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => setShowPayload(!showPayload)}
+              >
+                {showPayload ? "Hide Agent Contract Payload" : "Inspect Agent Contract Payload (rebalance_out)"}
+              </button>
+            </div>
+
+            {showPayload && (
+              <pre className="payload-preview-code">
+                {JSON.stringify(mockPayload, null, 2)}
+              </pre>
+            )}
+          </div>
         </div>
       )}
     </section>

@@ -66,19 +66,29 @@ vault-pilot/
 │   ├── src/lib.rs             # deposits, shares, rebalance, views, inline tests
 │   └── src/policy.rs          # on-chain guardrails
 ├── agent/                     # TypeScript worker
-│   ├── src/index.ts           # loop
-│   ├── src/intents.ts         # 1Click quote/status client
+│   ├── src/index.ts           # loop & 4-phase state machine
+│   ├── src/intents.ts         # 1Click quote, status polling & return quote client
 │   ├── src/wallet.ts          # function-call key scope check
 │   ├── src/strategy.ts        # spread + threshold logic
 │   ├── src/venue.ts           # multi-venue ranking + yield projections (modeled)
 │   ├── src/history-server.ts  # read-only /api/history endpoint over the JSONL log
 │   ├── src/mock-return.ts     # treasury return helper for the demo
-│   └── src/rpc.ts             # NEAR view calls + gas price
+│   ├── src/rpc.ts             # NEAR view calls + gas price
+│   └── scripts/
+│       ├── demo-walkthrough.ts# One-line autonomous lifecycle simulation
+│       ├── deploy-vault.ts    # Contract deployment and init
+│       └── setup-agent-key.ts # Scoped key generation and registration
 ├── dashboard/                 # Vite + React dashboard + wallet deposit/withdraw
-│   ├── src/lib/demo.ts        # labeled demo vault state + reasoning samples
-│   ├── src/components/NetworkBackground.tsx  # Three.js topology backdrop
-│   ├── src/components/DecisionStream.tsx     # live/demo agent terminal
-│   └── src/components/SetupBanner.tsx        # missing-contract guidance
+│   ├── src/components/
+│   │   ├── VaultDashboardHero.tsx     # Glassmorphic Choice A Hero with live indicators
+│   │   ├── VaultYieldCalculator.tsx   # Multi-strategy APY & horizon projection calculator
+│   │   ├── ActiveMoveCard.tsx         # Cross-chain route diagram & 1Click solver telemetry
+│   │   ├── QuoteSimulator.tsx         # Net-spread math inspector & contract JSON preview
+│   │   ├── RebalanceTable.tsx         # Searchable history ledger with CSV/JSON export
+│   │   ├── UserPosition.tsx           # Instant exit liquidity guard & storage helper
+│   │   ├── OwnerControls.tsx          # Emergency reset, pause & agent governance
+│   │   └── NetworkBackground.tsx      # Three.js NEAR hub topology backdrop
+│   └── src/lib/demo.ts        # labeled demo vault state + reasoning samples
 └── .github/workflows/ci.yml   # tests, wasm build, typecheck, dashboard build
 ```
 
@@ -160,6 +170,18 @@ policy, and logs the whole decision as JSON. In `DRY_RUN=true` it stops before s
 | Contract bug | Not audited. Do not hold real funds beyond a small demo amount. |
 
 ## Quickstart
+
+### ⚡ 60-Second Autonomous Walkthrough (For Judges)
+
+Test the complete end-to-end lifecycle (scoped key check &rarr; policy check &rarr; live 1Click quote &rarr; rebalance_out &rarr; solver telemetry &rarr; return quote &rarr; settle &rarr; share price update) with zero configuration:
+
+```bash
+cd agent
+npm install
+npm run demo:walkthrough
+```
+
+---
 
 ### 1. Contract
 

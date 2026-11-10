@@ -213,6 +213,39 @@ export function ActiveMoveCard({
         </div>
       </div>
 
+      {/* Cross-Chain Route Diagram */}
+      <div className="cross-chain-route-diagram">
+        <div className="route-node">
+          <div className="node-icon bg-purple-500/20 text-purple-300 border border-purple-500/40">
+            NEAR
+          </div>
+          <div className="node-info">
+            <strong>Origin Chain</strong>
+            <span>VaultPilot Vault</span>
+            <code className="text-[10px] text-gray-400">USDC (nep141)</code>
+          </div>
+        </div>
+
+        <div className="route-arrow-flow">
+          <span className="arrow-badge">1Click Solver Network</span>
+          <div className="flow-line">
+            <span className="flow-dot" />
+          </div>
+          <span className="text-[10px] text-cyan-400 font-mono">Zero Bridge Risk &bull; Intent Auction</span>
+        </div>
+
+        <div className="route-node">
+          <div className="node-icon bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+            ARB
+          </div>
+          <div className="node-info">
+            <strong>Destination Venue</strong>
+            <span>Arbitrum One</span>
+            <code className="text-[10px] text-gray-400">USDC (Native ERC-20)</code>
+          </div>
+        </div>
+      </div>
+
       {hasActiveMove ? (
         <div className="active-move-details">
           <div className="move-meta-grid">
@@ -356,6 +389,38 @@ export function ActiveMoveCard({
               )}
             </div>
           )}
+
+          {/* Solver Telemetry Event Log */}
+          <div className="solver-telemetry-log">
+            <div className="telemetry-log-header">
+              <span className="text-xs font-mono text-cyan-400 uppercase tracking-wider">
+                1Click Solver Event Stream &amp; Audit Trail
+              </span>
+              <span className="status-dot-pulse" />
+            </div>
+            <div className="telemetry-log-feed">
+              <div className="log-line">
+                <span className="log-time">[T+00s]</span>
+                <span className="log-tag tag-near">NEAR</span>
+                <span className="log-msg">Agent invoked <code>rebalance_out</code> &bull; on-chain guardrails verified</span>
+              </div>
+              <div className="log-line">
+                <span className="log-time">[T+06s]</span>
+                <span className="log-tag tag-intents">INTENTS</span>
+                <span className="log-msg">1Click deposit ingested &bull; solvers auctioning cross-chain fill</span>
+              </div>
+              <div className="log-line">
+                <span className="log-time">[T+18s]</span>
+                <span className="log-tag tag-arb">ARBITRUM</span>
+                <span className="log-msg">Solver fronted capital &bull; destination liquidity settled without bridge lockup</span>
+              </div>
+              <div className="log-line">
+                <span className="log-time">[T+34s]</span>
+                <span className="log-tag tag-venue">VENUE</span>
+                <span className="log-msg">Capital deployed to yield strategy &bull; monitoring spread vs NEAR APY</span>
+              </div>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="idle-move-notice">

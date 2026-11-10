@@ -9,6 +9,7 @@
     "once": "tsx src/index.ts --once",
     "mock:return": "tsx src/mock-return.ts",
     "history": "tsx src/history-server.ts",
+    "demo:walkthrough": "tsx scripts/demo-walkthrough.ts",
     "setup:agent": "tsx scripts/setup-agent-key.ts",
     "deploy": "tsx scripts/deploy-vault.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",

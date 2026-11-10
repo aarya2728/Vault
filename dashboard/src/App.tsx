@@ -7,7 +7,9 @@ import { QuoteSimulator } from "./components/QuoteSimulator.js";
 import { RebalanceTable } from "./components/RebalanceTable.js";
 import { SetupBanner } from "./components/SetupBanner.js";
 import { UserPosition } from "./components/UserPosition.js";
+import { VaultDashboardHero } from "./components/VaultDashboardHero.js";
 import { VaultStats } from "./components/VaultStats.js";
+import { VaultYieldCalculator } from "./components/VaultYieldCalculator.js";
 import { WalletBar } from "./components/WalletBar.js";
 import { useNear } from "./providers/NearProvider.js";
 import { DEMO_RECORDS, DEMO_SUMMARY } from "./lib/demo.js";
@@ -76,12 +78,15 @@ export default function App() {
       <Suspense fallback={null}>
         <NetworkBackground />
       </Suspense>
-      <header className="topbar">
+
+      <VaultDashboardHero summary={summary} />
+
+      <header className="topbar" id="vault-dashboard">
         <div className="brand">
           <span className="mark">VP</span>
           <div>
-            <h1>VaultPilot</h1>
-            <p>Autonomous stablecoin vault on NEAR Intents</p>
+            <h1>VaultPilot Dashboard</h1>
+            <p>Live on-chain status &amp; telemetry</p>
           </div>
         </div>
         <div className="topbar-right">
@@ -143,7 +148,10 @@ export default function App() {
           <>
             <OwnerControls summary={summary} onRefreshed={refresh} demo={demoMode} />
             <VaultStats summary={summary} />
-            <ActiveMoveCard summary={summary} onRefresh={refresh} demo={demoMode} />
+            <VaultYieldCalculator summary={summary} />
+            <div id="intent-tracker">
+              <ActiveMoveCard summary={summary} onRefresh={refresh} demo={demoMode} />
+            </div>
             <DecisionStream />
             {accountId || demoMode ? (
               <UserPosition summary={summary} onRefreshed={refresh} demo={demoMode} />
@@ -156,8 +164,10 @@ export default function App() {
               </section>
             )}
             <div className="two-col">
-              <PolicyCard policy={summary.policy} />
-              <section className="panel">
+              <div id="policy-section">
+                <PolicyCard policy={summary.policy} />
+              </div>
+              <section className="panel" id="wiring-section">
                 <header className="panel-header">
                   <h2>Wiring</h2>
                 </header>
@@ -185,8 +195,12 @@ export default function App() {
                 </p>
               </section>
             </div>
-            <QuoteSimulator summary={summary} />
-            <RebalanceTable records={records} />
+            <div id="quote-simulator">
+              <QuoteSimulator summary={summary} />
+            </div>
+            <div id="rebalance-history">
+              <RebalanceTable records={records} />
+            </div>
           </>
         ) : (
           !error && (
