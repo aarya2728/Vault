@@ -7,12 +7,15 @@ import {
   fetchFtBalance,
   fetchShares,
   fetchStorageBalance,
+  fetchWithdrawalRequest,
   formatAmount,
   parseAmount,
   sharesForAssets,
   shorten,
+  type QueuedWithdrawal,
   type VaultSummary,
 } from "../lib/vault.js";
+import { DEMO_QUEUED_WITHDRAWAL } from "../lib/demo.js";
 
 const GAS = "100000000000000";
 const STORAGE_GAS = "30000000000000";
@@ -38,8 +41,9 @@ export function UserPosition({
   const { accountId, callMethod } = useNear();
   const [tokenBalance, setTokenBalance] = useState<bigint | null>(null);
   const [shares, setShares] = useState<bigint | null>(null);
+  const [queuedWithdrawal, setQueuedWithdrawal] = useState<QueuedWithdrawal | null>(null);
   const [loading, setLoading] = useState(false);
-  const [pending, setPending] = useState<"deposit" | "withdraw" | null>(null);
+  const [pending, setPending] = useState<"deposit" | "withdraw" | "queue" | "claim" | "cancel" | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [txError, setTxError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
@@ -50,6 +54,7 @@ export function UserPosition({
     if (demo) {
       setTokenBalance(18_420_000_000n);
       setShares(75_000_000_000n);
+      setQueuedWithdrawal(DEMO_QUEUED_WITHDRAWAL);
       setReadError(null);
       setLoading(false);
       return;
@@ -57,12 +62,14 @@ export function UserPosition({
     if (!accountId) return;
     setLoading(true);
     try {
-      const [balanceRaw, sharesRaw] = await Promise.all([
+      const [balanceRaw, sharesRaw, queuedReq] = await Promise.all([
         fetchFtBalance(summary.token, accountId),
         fetchShares(accountId),
+        fetchWithdrawalRequest(accountId).catch(() => null),
       ]);
       setTokenBalance(BigInt(balanceRaw));
       setShares(BigInt(sharesRaw));
+      setQueuedWithdrawal(queuedReq);
       setReadError(null);
     } catch (cause) {
       setReadError(cause instanceof Error ? cause.message : String(cause));
@@ -78,6 +85,22 @@ export function UserPosition({
   const totalAssets = BigInt(summary.total_assets);
   const totalShares = BigInt(summary.total_shares);
   const positionValue = shares === null ? 0n : assetsForShares(shares, totalAssets, totalShares);
+  const idleAssets = BigInt(summary.idle_assets);
+  const deployedAssets = BigInt(summary.deployed_assets);
+  const totalCapital = idleAssets + deployedAssets;
+  const idlePct = totalCapital > 0n ? Number((idleAssets * 100n) / totalCapital) : 100;
+  const maxInstant = positionValue < idleAssets ? positionValue : idleAssets;
+  const symbol = config.tokenSymbol;
+
+  let withdrawAssets = 0n;
+  try {
+    if (withdrawInput.trim() !== "") {
+      withdrawAssets = parseAmount(withdrawInput);
+    }
+  } catch {
+    withdrawAssets = 0n;
+  }
+  const exceedsIdle = withdrawAssets > 0n && withdrawAssets > idleAssets;
 
   async function handleDeposit(event: FormEvent) {
     event.preventDefault();
@@ -167,10 +190,9 @@ export function UserPosition({
       return;
     }
 
-    const idleAssets = BigInt(summary.idle_assets);
     if (assets > idleAssets) {
       setTxError(
-        `Withdrawal of ${formatAmount(assets)} ${config.tokenSymbol} exceeds available idle liquidity (${formatAmount(idleAssets)} ${config.tokenSymbol}). Remaining capital is deployed in cross-chain rebalance. You can withdraw up to ${formatAmount(idleAssets)} immediately, or wait for settlement.`,
+        `Withdrawal of ${formatAmount(assets)} ${config.tokenSymbol} exceeds available idle liquidity (${formatAmount(idleAssets)} ${config.tokenSymbol}). Please use "Queue Withdrawal" below to schedule epoch unbonding.`,
       );
       return;
     }
@@ -212,29 +234,187 @@ export function UserPosition({
     }
   }
 
-  const symbol = config.tokenSymbol;
-  const idleAssets = BigInt(summary.idle_assets);
-  const deployedAssets = BigInt(summary.deployed_assets);
-  const totalCapital = idleAssets + deployedAssets;
-  const idlePct = totalCapital > 0n ? Number((idleAssets * 100n) / totalCapital) : 100;
-  const maxInstant = positionValue < idleAssets ? positionValue : idleAssets;
+  async function handleQueueWithdrawal() {
+    setTxError(null);
+    setTxHash(null);
+
+    if (demo) {
+      setPending("queue");
+      setTimeout(() => {
+        setQueuedWithdrawal({
+          account_id: "demo-user.testnet",
+          shares: "12500000000",
+          requested_at_ms: Date.now(),
+          epoch: summary.current_epoch ?? 4,
+          status: "pending",
+          assets_allocated: "0",
+        });
+        setPending(null);
+      }, 500);
+      return;
+    }
+
+    if (!accountId) {
+      setTxError("connect a wallet first");
+      return;
+    }
+    if (shares === null || shares <= 0n) {
+      setTxError("no vault shares to queue");
+      return;
+    }
+    if (!config.vaultContract) {
+      setTxError("VITE_VAULT_CONTRACT is not set");
+      return;
+    }
+
+    let assets: bigint;
+    try {
+      assets = parseAmount(withdrawInput);
+    } catch (cause) {
+      setTxError(cause instanceof Error ? cause.message : String(cause));
+      return;
+    }
+
+    const requested = assets >= positionValue ? shares : sharesForAssets(assets, totalAssets, totalShares);
+    const sharesToQueue = requested > shares ? shares : requested;
+    if (sharesToQueue <= 0n) {
+      setTxError("amount is too small to queue");
+      return;
+    }
+
+    setPending("queue");
+    try {
+      const result = await callMethod({
+        contractId: config.vaultContract,
+        methodName: "request_withdrawal",
+        args: { shares: sharesToQueue.toString() },
+        gas: GAS,
+        deposit: "0",
+      });
+      setTxHash(transactionHash(result));
+      setWithdrawInput("");
+      await load();
+      onRefreshed();
+    } catch (cause) {
+      setTxError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function handleClaimWithdrawal() {
+    setTxError(null);
+    setTxHash(null);
+
+    if (demo) {
+      setPending("claim");
+      setTimeout(() => {
+        setQueuedWithdrawal(null);
+        setTokenBalance((prev) => (prev ?? 0n) + 12_845_000_000n);
+        setPending(null);
+      }, 500);
+      return;
+    }
+
+    if (!accountId || !config.vaultContract) return;
+
+    setPending("claim");
+    try {
+      if (!(await fetchStorageBalance(summary.token, accountId))) {
+        await callMethod({
+          contractId: summary.token,
+          methodName: "storage_deposit",
+          args: { account_id: accountId },
+          gas: STORAGE_GAS,
+          deposit: STORAGE_DEPOSIT,
+        });
+      }
+
+      const result = await callMethod({
+        contractId: config.vaultContract,
+        methodName: "claim_withdrawal",
+        args: {},
+        gas: GAS,
+        deposit: "0",
+      });
+      setTxHash(transactionHash(result));
+      await load();
+      onRefreshed();
+    } catch (cause) {
+      setTxError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function handleCancelWithdrawal() {
+    setTxError(null);
+    setTxHash(null);
+
+    if (demo) {
+      setPending("cancel");
+      setTimeout(() => {
+        setQueuedWithdrawal(null);
+        setPending(null);
+      }, 500);
+      return;
+    }
+
+    if (!accountId || !config.vaultContract) return;
+
+    setPending("cancel");
+    try {
+      const result = await callMethod({
+        contractId: config.vaultContract,
+        methodName: "cancel_withdrawal_request",
+        args: {},
+        gas: GAS,
+        deposit: "0",
+      });
+      setTxHash(transactionHash(result));
+      await load();
+      onRefreshed();
+    } catch (cause) {
+      setTxError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPending(null);
+    }
+  }
+
   const depositBlocked = demo || summary.paused || pending !== null;
-  const withdrawBlocked =
-    demo || pending !== null || shares === null || shares <= 0n;
+  const withdrawBlocked = demo || pending !== null || shares === null || shares <= 0n;
+
+  const queuedSharesVal = queuedWithdrawal ? BigInt(queuedWithdrawal.shares) : 0n;
+  const queuedEstimatedAssets =
+    queuedSharesVal > 0n ? assetsForShares(queuedSharesVal, totalAssets, totalShares) : 0n;
+  const isQueueReady =
+    queuedWithdrawal !== null &&
+    (queuedWithdrawal.status === "ready" ||
+      (idleAssets >= queuedEstimatedAssets && deployedAssets === 0n));
 
   return (
     <section className="panel">
       <header className="panel-header">
-        <h2>Your position</h2>
-        <span className="muted">
-          {demo
-            ? "demo position"
-            : loading
-            ? "reading..."
-            : accountId
-            ? shorten(accountId, 12, 8)
-            : ""}
-        </span>
+        <div>
+          <h2>Your position</h2>
+          <span className="muted">
+            {demo
+              ? "demo position"
+              : loading
+              ? "reading..."
+              : accountId
+              ? shorten(accountId, 12, 8)
+              : ""}
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <span className="chip">Epoch #{summary.current_epoch ?? 1}</span>
+          {summary.queued_shares && BigInt(summary.queued_shares) > 0n && (
+            <span className="chip" title="Total shares queued across all depositors">
+              Queue: {formatAmount(summary.queued_shares)} shares
+            </span>
+          )}
+        </div>
       </header>
 
       {demo && (
@@ -256,6 +436,10 @@ export function UserPosition({
         <div>
           <span className="stat-label">Position value</span>
           <strong>{shares === null ? "-" : `${formatAmount(positionValue)} ${symbol}`}</strong>
+        </div>
+        <div>
+          <span className="stat-label">Unbonding Queue</span>
+          <strong>{queuedSharesVal > 0n ? `${formatAmount(queuedSharesVal)} shares` : "0 shares"}</strong>
         </div>
       </div>
 
@@ -284,6 +468,59 @@ export function UserPosition({
       </div>
 
       {readError && !demo && <p className="form-error">Read failed: {readError}</p>}
+
+      {queuedWithdrawal && queuedSharesVal > 0n && (
+        <div className="owner-card" style={{ borderColor: isQueueReady ? "var(--color-ok)" : "var(--color-warn)", marginBottom: "1.25rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", width: "100%" }}>
+            <div>
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <strong>Epoch Redemption Queue</strong>
+                <span className={`pill ${isQueueReady ? "pill-ok" : "pill-warn"}`}>
+                  {isQueueReady ? "Ready to Claim" : `Queued (Epoch #${queuedWithdrawal.epoch})`}
+                </span>
+              </div>
+              <p className="muted small" style={{ margin: "0.35rem 0" }}>
+                {isQueueReady
+                  ? "Yield settlement is complete! Idle liquidity has replenished; your funds are ready to claim."
+                  : "Your withdrawal is ordered in the unbonding queue. Funds unlock automatically upon cross-chain yield settlement."}
+              </p>
+              <div style={{ display: "flex", gap: "1.5rem", marginTop: "0.5rem" }}>
+                <div>
+                  <span className="stat-label">Queued Shares:</span>{" "}
+                  <strong>{formatAmount(queuedWithdrawal.shares)}</strong>
+                </div>
+                <div>
+                  <span className="stat-label">Est. Value:</span>{" "}
+                  <strong>
+                    {formatAmount(queuedEstimatedAssets)} {symbol}
+                  </strong>
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", marginLeft: "1rem" }}>
+              {isQueueReady ? (
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={() => void handleClaimWithdrawal()}
+                  disabled={pending !== null}
+                >
+                  {pending === "claim" ? "Claiming..." : `Claim ${symbol}`}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="button button-warn"
+                  onClick={() => void handleCancelWithdrawal()}
+                  disabled={pending !== null}
+                >
+                  {pending === "cancel" ? "Cancelling..." : "Cancel Queue"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="action-grid">
         <form className="action-card" onSubmit={(event) => void handleDeposit(event)}>
@@ -324,9 +561,7 @@ export function UserPosition({
         <form className="action-card" onSubmit={(event) => void handleWithdraw(event)}>
           <h3>Withdraw</h3>
           <p className="muted small">
-            Burn shares for idle {symbol}. Withdrawals stay open while the vault is paused. If this
-            account has never held {symbol}, the first withdrawal also registers token storage
-            (0.00125 NEAR).
+            Burn shares for idle {symbol}. Instant withdrawal is available up to idle liquidity. For larger exits, queue for Epoch unbonding.
           </p>
           <div className="field">
             <input
@@ -352,23 +587,34 @@ export function UserPosition({
               onClick={() => setWithdrawInput(formatAmount(positionValue))}
               disabled={demo || pending !== null || positionValue === 0n}
             >
-              Max
+              Full Max
             </button>
           </div>
-          {idleAssets < positionValue && (
-            <p className="muted small" style={{ color: "var(--color-warn, #e5a93c)" }}>
-              Notice: {formatAmount(idleAssets)} {symbol} currently idle for instant exit. (
-              {formatAmount(deployedAssets)} {symbol} deployed across the vault&apos;s cross-chain
-              position).
-            </p>
+
+          {exceedsIdle ? (
+            <div style={{ marginTop: "0.5rem" }}>
+              <p className="muted small" style={{ color: "var(--color-warn, #e5a93c)", marginBottom: "0.5rem" }}>
+                Request exceeds instant idle liquidity ({formatAmount(idleAssets)} {symbol}). Queue your shares for orderly unbonding at Epoch #{summary.current_epoch ?? 1}.
+              </p>
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => void handleQueueWithdrawal()}
+                disabled={withdrawBlocked}
+                style={{ width: "100%" }}
+              >
+                {pending === "queue" ? "Queueing..." : `Queue for Epoch #${summary.current_epoch ?? 1} Unbonding`}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="submit"
+              className="button button-primary"
+              disabled={withdrawBlocked || withdrawInput.trim() === ""}
+            >
+              {pending === "withdraw" ? "Withdrawing..." : `Instant Withdraw ${symbol}`}
+            </button>
           )}
-          <button
-            type="submit"
-            className="button button-primary"
-            disabled={withdrawBlocked || withdrawInput.trim() === ""}
-          >
-            {pending === "withdraw" ? "Withdrawing..." : `Withdraw ${symbol}`}
-          </button>
         </form>
       </div>
 

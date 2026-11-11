@@ -14,6 +14,7 @@ pub use policy::Policy;
 enum StorageKey {
     Shares,
     Rebalances,
+    WithdrawalRequests,
 }
 
 #[near(serializers = [json, borsh])]
@@ -46,6 +47,26 @@ pub struct PendingMove {
     pub status: String,
 }
 
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueuedWithdrawal {
+    pub account_id: AccountId,
+    pub shares: U128,
+    pub requested_at_ms: u64,
+    pub epoch: u64,
+    pub status: String,
+    pub assets_allocated: U128,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimelockedPolicyProposal {
+    pub policy: Policy,
+    pub proposed_at_ms: u64,
+    pub eta_ms: u64,
+    pub proposer: AccountId,
+}
+
 #[near(serializers = [json])]
 #[derive(Clone, Debug)]
 pub struct VaultSummary {
@@ -66,6 +87,9 @@ pub struct VaultSummary {
     pub last_move_ms: u64,
     pub pending_move: Option<PendingMove>,
     pub policy: Policy,
+    pub current_epoch: u64,
+    pub queued_shares: U128,
+    pub pending_policy_proposal: Option<TimelockedPolicyProposal>,
 }
 
 #[near(contract_state)]
@@ -86,10 +110,16 @@ pub struct VaultPilot {
     daily_bucket: u64,
     pending_move: Option<PendingMove>,
     last_move_ms: u64,
+    current_epoch: u64,
+    queued_shares: u128,
+    withdrawal_requests: LookupMap<AccountId, QueuedWithdrawal>,
+    timelock_duration_ms: u64,
+    pending_policy_proposal: Option<TimelockedPolicyProposal>,
 }
 
 const DAY_NS: u64 = 86_400_000_000_000;
 const SHARE_PRICE_SCALE: u128 = 1_000_000_000_000_000_000_000_000;
+const DEFAULT_TIMELOCK_DURATION_MS: u64 = 86_400_000; // 24 hours
 
 /// Minimum first deposit. Prevents the classic first-depositor share inflation
 /// attack together with the virtual share/asset offsets below.
@@ -124,6 +154,11 @@ impl Default for VaultPilot {
             daily_bucket: 0,
             pending_move: None,
             last_move_ms: 0,
+            current_epoch: 1,
+            queued_shares: 0,
+            withdrawal_requests: LookupMap::new(StorageKey::WithdrawalRequests),
+            timelock_duration_ms: DEFAULT_TIMELOCK_DURATION_MS,
+            pending_policy_proposal: None,
         }
     }
 }
@@ -150,6 +185,11 @@ impl VaultPilot {
             daily_bucket: current_day(),
             pending_move: None,
             last_move_ms: 0,
+            current_epoch: 1,
+            queued_shares: 0,
+            withdrawal_requests: LookupMap::new(StorageKey::WithdrawalRequests),
+            timelock_duration_ms: DEFAULT_TIMELOCK_DURATION_MS,
+            pending_policy_proposal: None,
         }
     }
 
@@ -266,6 +306,175 @@ impl VaultPilot {
                 }),
             );
         }
+    }
+
+    /// Queue a withdrawal request when idle liquidity is deployed in external venues.
+    /// Deducts shares from the user balance and reserves them in the redemption queue.
+    /// When the position settles and returns idle liquidity, the user can call `claim_withdrawal`.
+    pub fn request_withdrawal(&mut self, shares: U128) -> String {
+        let account = env::predecessor_account_id();
+        let shares = shares.0;
+        require!(shares > 0, "shares must be > 0");
+
+        let owned = self.shares.get(&account).copied().unwrap_or(0);
+        require!(owned >= shares, "insufficient shares");
+
+        require!(
+            self.withdrawal_requests.get(&account).is_none(),
+            "an existing withdrawal request is already pending; claim or cancel first"
+        );
+
+        let assets = self.assets_for_shares(shares);
+        require!(assets > 0, "amount too small");
+
+        self.shares.insert(account.clone(), owned - shares);
+        self.queued_shares += shares;
+
+        let now = env::block_timestamp() / 1_000_000;
+        let is_ready = self.idle_assets >= assets && self.deployed_assets == 0;
+        let status = if is_ready { "ready" } else { "pending" };
+        let allocated = if is_ready { assets } else { 0 };
+
+        let request = QueuedWithdrawal {
+            account_id: account.clone(),
+            shares: U128(shares),
+            requested_at_ms: now,
+            epoch: self.current_epoch,
+            status: status.to_string(),
+            assets_allocated: U128(allocated),
+        };
+
+        self.withdrawal_requests.insert(account.clone(), request);
+
+        emit_event(
+            "withdrawal_queued",
+            json!({
+                "account_id": account,
+                "shares": U128(shares),
+                "assets_estimated": U128(assets),
+                "epoch": self.current_epoch,
+                "status": status,
+            }),
+        );
+
+        status.to_string()
+    }
+
+    /// Claim a queued withdrawal once idle liquidity is available or after settlement.
+    pub fn claim_withdrawal(&mut self) -> Promise {
+        let account = env::predecessor_account_id();
+        let req = self
+            .withdrawal_requests
+            .get(&account)
+            .cloned()
+            .expect("no queued withdrawal found for this account");
+
+        let assets = if req.assets_allocated.0 > 0 {
+            req.assets_allocated.0
+        } else {
+            self.assets_for_shares(req.shares.0)
+        };
+
+        require!(assets > 0, "amount too small");
+        require!(
+            self.idle_assets >= assets,
+            "insufficient idle liquidity to claim yet; waiting for settlement"
+        );
+
+        self.withdrawal_requests.remove(&account);
+        self.queued_shares = self.queued_shares.saturating_sub(req.shares.0);
+        self.total_shares = self.total_shares.saturating_sub(req.shares.0);
+        self.total_assets = self.total_assets.saturating_sub(assets);
+        self.idle_assets = self.idle_assets.saturating_sub(assets);
+
+        emit_event(
+            "withdrawal_claimed",
+            json!({
+                "account_id": account.clone(),
+                "shares": req.shares,
+                "assets": U128(assets),
+                "epoch": req.epoch,
+            }),
+        );
+
+        let callback_args = json!({
+            "account_id": account.clone(),
+            "shares": req.shares,
+            "assets": U128(assets),
+            "epoch": req.epoch,
+        })
+        .to_string()
+        .into_bytes();
+
+        self.ft_transfer(account, assets).then(
+            Promise::new(env::current_account_id()).function_call(
+                "on_claim_withdrawal".to_string(),
+                callback_args,
+                NearToken::from_yoctonear(0),
+                Gas::from_tgas(20),
+            ),
+        )
+    }
+
+    /// Restores the queued withdrawal if the token transfer failed.
+    #[private]
+    pub fn on_claim_withdrawal(
+        &mut self,
+        account_id: AccountId,
+        shares: U128,
+        assets: U128,
+        epoch: u64,
+    ) {
+        if env::promise_result(0) == PromiseResult::Failed {
+            self.total_shares += shares.0;
+            self.queued_shares += shares.0;
+            self.total_assets += assets.0;
+            self.idle_assets += assets.0;
+
+            let req = QueuedWithdrawal {
+                account_id: account_id.clone(),
+                shares,
+                requested_at_ms: env::block_timestamp() / 1_000_000,
+                epoch,
+                status: "ready".to_string(),
+                assets_allocated: assets,
+            };
+            self.withdrawal_requests.insert(account_id.clone(), req);
+
+            env::log_str("claim_withdrawal failed; queued request restored");
+            emit_event(
+                "claim_withdrawal_reverted",
+                json!({
+                    "account_id": account_id,
+                    "shares": shares,
+                    "assets": assets,
+                }),
+            );
+        }
+    }
+
+    /// Cancel a pending queued withdrawal request and restore shares to user balance.
+    pub fn cancel_withdrawal_request(&mut self) {
+        let account = env::predecessor_account_id();
+        let req = self
+            .withdrawal_requests
+            .get(&account)
+            .cloned()
+            .expect("no pending withdrawal request to cancel");
+
+        self.withdrawal_requests.remove(&account);
+        self.queued_shares = self.queued_shares.saturating_sub(req.shares.0);
+
+        let current = self.shares.get(&account).copied().unwrap_or(0);
+        self.shares.insert(account.clone(), current + req.shares.0);
+
+        emit_event(
+            "withdrawal_request_cancelled",
+            json!({
+                "account_id": account,
+                "shares": req.shares,
+            }),
+        );
     }
 
     // ---------------------------------------------------------------- agent flows
@@ -432,6 +641,7 @@ impl VaultPilot {
         self.total_assets = self.idle_assets;
         self.pending_move = None;
         self.last_move_ms = env::block_timestamp() / 1_000_000;
+        self.current_epoch += 1;
 
         let id = self.record(
             "rebalance_in",
@@ -486,6 +696,78 @@ impl VaultPilot {
         self.policy = policy;
     }
 
+    /// Propose a policy change with a mandatory timelock delay (Institutional Governance).
+    pub fn propose_policy(&mut self, policy: Policy) {
+        self.assert_owner();
+        policy.assert_valid();
+
+        let now = env::block_timestamp() / 1_000_000;
+        let eta_ms = now + self.timelock_duration_ms;
+
+        let proposal = TimelockedPolicyProposal {
+            policy: policy.clone(),
+            proposed_at_ms: now,
+            eta_ms,
+            proposer: env::predecessor_account_id(),
+        };
+
+        self.pending_policy_proposal = Some(proposal);
+
+        emit_event(
+            "policy_proposed",
+            json!({
+                "policy": policy,
+                "proposed_at_ms": now,
+                "eta_ms": eta_ms,
+                "timelock_duration_ms": self.timelock_duration_ms,
+            }),
+        );
+    }
+
+    /// Execute an approved policy change after the timelock delay has elapsed.
+    pub fn execute_policy(&mut self) {
+        self.assert_owner();
+        let proposal = self
+            .pending_policy_proposal
+            .take()
+            .expect("no pending policy proposal to execute");
+
+        let now = env::block_timestamp() / 1_000_000;
+        require!(
+            now >= proposal.eta_ms,
+            "timelock delay has not elapsed yet"
+        );
+
+        self.policy = proposal.policy.clone();
+
+        emit_event(
+            "policy_executed",
+            json!({
+                "policy": self.policy,
+                "executed_at_ms": now,
+            }),
+        );
+    }
+
+    /// Cancel a pending policy proposal before execution.
+    pub fn cancel_policy_proposal(&mut self) {
+        self.assert_owner();
+        require!(
+            self.pending_policy_proposal.is_some(),
+            "no pending policy proposal"
+        );
+        self.pending_policy_proposal = None;
+        emit_event("policy_proposal_cancelled", json!({}));
+    }
+
+    /// Configure the timelock duration in milliseconds (e.g. 86400000 = 24h).
+    pub fn set_timelock_duration(&mut self, duration_ms: u64) {
+        self.assert_owner();
+        require!(duration_ms >= 3_600_000, "timelock must be at least 1 hour");
+        self.timelock_duration_ms = duration_ms;
+        emit_event("set_timelock_duration", json!({ "duration_ms": duration_ms }));
+    }
+
     /// Owner escape hatch for an `ft_transfer` that failed after accounting
     /// moved. This does not move funds; it only clears `deployed_assets` and
     /// re-bases `total_assets` on the idle balance. Use only after checking the
@@ -537,7 +819,30 @@ impl VaultPilot {
             last_move_ms: self.last_move_ms,
             pending_move: self.pending_move.clone(),
             policy: self.policy.clone(),
+            current_epoch: self.current_epoch,
+            queued_shares: U128(self.queued_shares),
+            pending_policy_proposal: self.pending_policy_proposal.clone(),
         }
+    }
+
+    pub fn get_withdrawal_request(&self, account_id: AccountId) -> Option<QueuedWithdrawal> {
+        self.withdrawal_requests.get(&account_id).cloned()
+    }
+
+    pub fn get_policy_proposal(&self) -> Option<TimelockedPolicyProposal> {
+        self.pending_policy_proposal.clone()
+    }
+
+    pub fn get_timelock_duration_ms(&self) -> u64 {
+        self.timelock_duration_ms
+    }
+
+    pub fn get_current_epoch(&self) -> u64 {
+        self.current_epoch
+    }
+
+    pub fn get_queued_shares(&self) -> U128 {
+        U128(self.queued_shares)
     }
 
     pub fn get_policy(&self) -> Policy {
@@ -1153,5 +1458,113 @@ mod tests {
         let shares = vault.preview_deposit(U128(5_000)).0;
         assert!(shares > 0);
         assert!(shares < 5_000);
+    }
+
+    #[test]
+    fn queued_withdrawal_and_claim_flow() {
+        testing_env!(context(accounts(0)).build());
+        let mut vault = contract();
+        deposit(&mut vault, accounts(0), 20_000);
+
+        // Deploy 10,000 to external venue so idle becomes 10,000
+        let id = open_position(&mut vault, 10_000);
+        confirm_out(&mut vault, id, 10_000, true);
+        assert_eq!(vault.idle_assets, 10_000);
+        assert_eq!(vault.deployed_assets, 10_000);
+
+        // User requests withdrawal of 12,000 shares (more than idle 10,000)
+        testing_env!(context(accounts(0)).build());
+        let status = vault.request_withdrawal(U128(12_000));
+        assert_eq!(status, "pending");
+        assert_eq!(vault.get_queued_shares().0, 12_000);
+        assert_eq!(vault.get_shares(accounts(0)).0, 8_000); // 20k - 12k
+
+        let req = vault.get_withdrawal_request(accounts(0)).expect("request exists");
+        assert_eq!(req.status, "pending");
+        assert_eq!(req.shares.0, 12_000);
+
+        // External position settles back with 10,500
+        settle_in(&mut vault, 20_500);
+        assert_eq!(vault.idle_assets, 20_500);
+        assert_eq!(vault.get_current_epoch(), 2);
+
+        // User can now claim their queued withdrawal
+        testing_env!(context(accounts(0)).build());
+        vault.claim_withdrawal();
+
+        assert_eq!(vault.get_queued_shares().0, 0);
+        assert!(vault.get_withdrawal_request(accounts(0)).is_none());
+    }
+
+    #[test]
+    fn cancel_queued_withdrawal_restores_shares() {
+        testing_env!(context(accounts(0)).build());
+        let mut vault = contract();
+        deposit(&mut vault, accounts(0), 20_000);
+
+        // Deploy 10,000
+        let id = open_position(&mut vault, 10_000);
+        confirm_out(&mut vault, id, 10_000, true);
+
+        // Queue withdrawal
+        testing_env!(context(accounts(0)).build());
+        vault.request_withdrawal(U128(8_000));
+        assert_eq!(vault.get_shares(accounts(0)).0, 12_000);
+        assert_eq!(vault.get_queued_shares().0, 8_000);
+
+        // Cancel
+        vault.cancel_withdrawal_request();
+        assert_eq!(vault.get_shares(accounts(0)).0, 20_000);
+        assert_eq!(vault.get_queued_shares().0, 0);
+        assert!(vault.get_withdrawal_request(accounts(0)).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "timelock delay has not elapsed yet")]
+    fn governance_timelock_fails_before_delay() {
+        testing_env!(context(accounts(0)).build());
+        let mut vault = contract();
+
+        let new_policy = Policy {
+            min_move: U128(2_000),
+            max_per_move: U128(50_000),
+            daily_cap: U128(100_000),
+            max_slippage_bps: 50,
+            allowed_destination_assets: vec!["nep141:arb-usdc".to_string()],
+        };
+
+        // Propose policy
+        vault.propose_policy(new_policy);
+        assert!(vault.get_policy_proposal().is_some());
+
+        // Immediately executing must panic
+        vault.execute_policy();
+    }
+
+    #[test]
+    fn governance_timelock_executes_after_delay() {
+        let start_time = 1_700_000_000_000_000_000;
+        testing_env!(context_at(accounts(0), start_time).build());
+        let mut vault = contract();
+
+        let new_policy = Policy {
+            min_move: U128(2_000),
+            max_per_move: U128(50_000),
+            daily_cap: U128(100_000),
+            max_slippage_bps: 50,
+            allowed_destination_assets: vec!["nep141:arb-usdc".to_string()],
+        };
+
+        // Propose
+        vault.propose_policy(new_policy.clone());
+
+        // Advance time by 25 hours (timelock is 24h = 86_400_000 ms)
+        let later = start_time + (25 * 3600 * 1_000_000_000);
+        testing_env!(context_at(accounts(0), later).build());
+
+        // Execute succeeds
+        vault.execute_policy();
+        assert_eq!(vault.get_policy().max_per_move.0, 50_000);
+        assert!(vault.get_policy_proposal().is_none());
     }
 }

@@ -24,6 +24,22 @@ export interface PendingMove {
   status: string;
 }
 
+export interface QueuedWithdrawal {
+  account_id: string;
+  shares: Amount;
+  requested_at_ms: number;
+  epoch: number;
+  status: "pending" | "ready" | string;
+  assets_allocated: Amount;
+}
+
+export interface TimelockedPolicyProposal {
+  policy: Policy;
+  proposed_at_ms: number;
+  eta_ms: number;
+  proposer: string;
+}
+
 export interface VaultSummary {
   owner: string;
   token: string;
@@ -41,6 +57,9 @@ export interface VaultSummary {
   last_move_ms: number;
   pending_move: PendingMove | null;
   policy: Policy;
+  current_epoch?: number;
+  queued_shares?: Amount;
+  pending_policy_proposal?: TimelockedPolicyProposal | null;
 }
 
 export interface RebalanceRecord {

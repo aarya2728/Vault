@@ -18,6 +18,22 @@ export interface PendingMove {
   status: string;
 }
 
+export interface QueuedWithdrawal {
+  account_id: string;
+  shares: Amount;
+  requested_at_ms: number;
+  epoch: number;
+  status: "pending" | "ready" | string;
+  assets_allocated: Amount;
+}
+
+export interface TimelockedPolicyProposal {
+  policy: Policy;
+  proposed_at_ms: number;
+  eta_ms: number;
+  proposer: string;
+}
+
 export interface VaultSummary {
   owner: string;
   token: string;
@@ -35,6 +51,9 @@ export interface VaultSummary {
   last_move_ms: number;
   pending_move: PendingMove | null;
   policy: Policy;
+  current_epoch?: number;
+  queued_shares?: Amount;
+  pending_policy_proposal?: TimelockedPolicyProposal | null;
 }
 
 export interface RebalanceRecord {
@@ -237,6 +256,14 @@ export function fetchRebalances(fromIndex = 0, limit = 25): Promise<RebalanceRec
 
 export function fetchShares(accountId: string): Promise<string> {
   return view<string>("get_shares", { account_id: accountId });
+}
+
+export function fetchWithdrawalRequest(accountId: string): Promise<QueuedWithdrawal | null> {
+  return view<QueuedWithdrawal | null>("get_withdrawal_request", { account_id: accountId });
+}
+
+export function fetchPolicyProposal(): Promise<TimelockedPolicyProposal | null> {
+  return view<TimelockedPolicyProposal | null>("get_policy_proposal");
 }
 
 export function fetchFtBalance(token: string, accountId: string): Promise<string> {

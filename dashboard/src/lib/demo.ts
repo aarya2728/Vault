@@ -1,4 +1,4 @@
-import type { RebalanceRecord, VaultSummary } from "./vault.js";
+import type { QueuedWithdrawal, RebalanceRecord, VaultSummary } from "./vault.js";
 
 const NEAR_USDC = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
 const ARB_USDC = "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near";
@@ -26,6 +26,8 @@ export const DEMO_SUMMARY: VaultSummary = {
   daily_remaining: "10000000000",
   today_bucket: today,
   last_move_ms: now - 3 * 60 * 60 * 1000,
+  current_epoch: 4,
+  queued_shares: "12500000000",
   pending_move: {
     id: 42,
     amount: "25000000000",
@@ -42,6 +44,27 @@ export const DEMO_SUMMARY: VaultSummary = {
     max_slippage_bps: 100,
     allowed_destination_assets: [ARB_USDC, BASE_USDC],
   },
+  pending_policy_proposal: {
+    policy: {
+      min_move: "10000000",
+      max_per_move: "65000000000",
+      daily_cap: "35000000000",
+      max_slippage_bps: 75,
+      allowed_destination_assets: [ARB_USDC, BASE_USDC],
+    },
+    proposed_at_ms: now - 36 * 60 * 60 * 1000,
+    eta_ms: now + 12 * 60 * 60 * 1000,
+    proposer: "council.roundvest.testnet",
+  },
+};
+
+export const DEMO_QUEUED_WITHDRAWAL: QueuedWithdrawal = {
+  account_id: "demo-user.testnet",
+  shares: "12500000000",
+  requested_at_ms: now - 4 * 60 * 60 * 1000,
+  epoch: 3,
+  status: "pending",
+  assets_allocated: "0",
 };
 
 const seedRecords: Array<Omit<RebalanceRecord, "id" | "timestamp_ms">> = [
