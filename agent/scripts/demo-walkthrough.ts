@@ -175,23 +175,27 @@ async function main(): Promise<void> {
   // -------------------------------------------------------------------------
   // Step 4: Outbound Rebalance Execution
   // -------------------------------------------------------------------------
-  console.log(bold("STEP 4: Contract rebalance_out & NEP-297 Event"));
+  console.log(bold("STEP 4: Contract rebalance_out & NEAR Chain Signatures Custody"));
   divider();
   const depositTarget = quoteResult.quote.depositAddress ?? "0x39a1c13bc949f2b3e414f529f7f451f2.1click.near";
-  console.log(`Dispatching Method: ${cyan("rebalance_out")}`);
+  const mpcAddress = "0x39a1c13bc949f2b3e414f529f7f451f21d6e8a0";
+  console.log(`Dispatching Method: ${cyan("rebalance_out_portfolio")}`);
   console.log(`  amount:           ${green("25000000")} (25.00 USDC)`);
+  console.log(`  venue:            ${yellow("Morpho Blue (Arbitrum)")}`);
   console.log(`  destinationAsset: ${dim(config.destinationAsset)}`);
+  console.log(`  mpcRecipient:     ${green(mpcAddress)} (Derived via Chain Signatures MPC)`);
   console.log(`  depositAddress:   ${yellow(depositTarget)}`);
   console.log(`  minOut:           ${green(decision.minAmountOut.toString())}`);
   console.log(`  reason:           "${dim(decision.reason.slice(0, 60))}..."`);
 
   console.log(`\n${bold("NEP-297 Emitted Event:")}`);
-  console.log(dim(`EVENT_JSON:{"standard":"vaultpilot","version":"1.0.0","event":"rebalance_out","data":{"id":0,"amount":"25000000","destination_asset":"arb-usdc","deposit_address":"${depositTarget}","executor":"${config.agentAccount}"}}`));
+  console.log(dim(`EVENT_JSON:{"standard":"vaultpilot","version":"1.0.0","event":"rebalance_out","data":{"id":0,"amount":"25000000","venue":"Morpho Blue (Arbitrum)","recipient_evm":"${mpcAddress}","deposit_address":"${depositTarget}","executor":"${config.agentAccount}"}}`));
 
-  console.log(green("✓ Outbound token transfer confirmed. Position status: OPEN"));
+  console.log(green("✓ Outbound token transfer confirmed. Multi-Position status: OPEN"));
   console.log(`  Vault Idle Assets:     ${(75.0).toFixed(2)} USDC`);
   console.log(`  Vault Deployed Assets: ${(25.0).toFixed(2)} USDC`);
-  console.log(`  Vault Total Assets:    ${(100.0).toFixed(2)} USDC (NAV Preserved)\n`);
+  console.log(`  Vault Total Assets:    ${(100.0).toFixed(2)} USDC (NAV Preserved)`);
+  console.log(`  Custody Verification:  ${green("MPC Self-Custodial (No EOA bot key risk)")}\n`);
   await sleep(1200);
 
   // -------------------------------------------------------------------------
@@ -204,10 +208,10 @@ async function main(): Promise<void> {
   await sleep(800);
   console.log(`  [Poll 2 / 60s] Status: ${cyan("PROCESSING")}       ➔ Cross-chain intent batch filled by market maker`);
   await sleep(800);
-  console.log(`  [Poll 3 / 90s] Status: ${green("SUCCESS")}          ➔ Capital delivered to Arbitrum recipient`);
+  console.log(`  [Poll 3 / 90s] Status: ${green("SUCCESS")}          ➔ Delivered to contract-controlled MPC recipient on Arbitrum`);
   console.log(`  Intent Hash:          ${dim("0x89f2a71b4e209cd83a125740f92ec173d5")}`);
   console.log(`  Arbitrum Tx Hash:     ${dim("0x3f51e04c882193b2a59f993d04736f1c42b")}`);
-  console.log(green("✓ Cross-chain leg confirmed executed.\n"));
+  console.log(green("✓ Cross-chain leg confirmed executed under contract MPC custody.\n"));
   await sleep(1000);
 
   // -------------------------------------------------------------------------

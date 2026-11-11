@@ -1,4 +1,4 @@
-import type { QueuedWithdrawal, RebalanceRecord, VaultSummary } from "./vault.js";
+import type { Position, QueuedWithdrawal, RebalanceRecord, VaultSummary } from "./vault.js";
 
 const NEAR_USDC = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
 const ARB_USDC = "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near";
@@ -10,6 +10,43 @@ const today = Math.floor(now / 86_400_000);
 
 export const DEMO_OWNER = "roundvest2883.testnet";
 export const DEMO_AGENT = "agent.roundvest2883.testnet";
+export const DEMO_MPC_ADDRESS = "0x39a1c13bc949f2b3e414f529f7f451f21d6e8a0";
+
+export const DEMO_POSITIONS: Position[] = [
+  {
+    id: 42,
+    amount: "25000000000",
+    destination_asset: ARB_USDC,
+    venue: "Morpho Blue (Arbitrum)",
+    deposit_address: "0x9f2c7a6b1e4d8c3f5a0b2d7e9c1f4a6b8d3e5c70",
+    recipient_evm_address: DEMO_MPC_ADDRESS,
+    min_out: "24875000000",
+    opened_at_ms: now - 12 * 60 * 1000,
+    status: "PROCESSING",
+  },
+  {
+    id: 43,
+    amount: "18000000000",
+    destination_asset: BASE_USDC,
+    venue: "Aave v3 (Base)",
+    deposit_address: "0x4d8a2f6b0c3e5d7a9f1b2c4d6e8a0b2c4d6e8a0b",
+    recipient_evm_address: "0x7b2f6a1e8c9d0b3f4a5c6e7d8f9a0b1c2d3e4f5a",
+    min_out: "17910000000",
+    opened_at_ms: now - 45 * 60 * 1000,
+    status: "OPEN",
+  },
+  {
+    id: 44,
+    amount: "39500000000",
+    destination_asset: ARB_USDC,
+    venue: "Compound v3 (Arbitrum)",
+    deposit_address: "0x8b1e4f7a0c3d6b9e2f5a8c1d4e7b0f3a6c9d2e50",
+    recipient_evm_address: DEMO_MPC_ADDRESS,
+    min_out: "39300000000",
+    opened_at_ms: now - 120 * 60 * 1000,
+    status: "OPEN",
+  },
+];
 
 export const DEMO_SUMMARY: VaultSummary = {
   owner: DEMO_OWNER,
@@ -28,6 +65,8 @@ export const DEMO_SUMMARY: VaultSummary = {
   last_move_ms: now - 3 * 60 * 60 * 1000,
   current_epoch: 4,
   queued_shares: "12500000000",
+  active_positions: DEMO_POSITIONS,
+  mpc_derived_address: DEMO_MPC_ADDRESS,
   pending_move: {
     id: 42,
     amount: "25000000000",

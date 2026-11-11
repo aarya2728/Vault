@@ -18,6 +18,18 @@ export interface PendingMove {
   status: string;
 }
 
+export interface Position {
+  id: number;
+  amount: Amount;
+  destination_asset: string;
+  venue: string;
+  deposit_address: string;
+  recipient_evm_address: string;
+  min_out: Amount;
+  opened_at_ms: number;
+  status: string;
+}
+
 export interface QueuedWithdrawal {
   account_id: string;
   shares: Amount;
@@ -54,6 +66,8 @@ export interface VaultSummary {
   current_epoch?: number;
   queued_shares?: Amount;
   pending_policy_proposal?: TimelockedPolicyProposal | null;
+  active_positions?: Position[];
+  mpc_derived_address?: string;
 }
 
 export interface RebalanceRecord {
@@ -264,6 +278,14 @@ export function fetchWithdrawalRequest(accountId: string): Promise<QueuedWithdra
 
 export function fetchPolicyProposal(): Promise<TimelockedPolicyProposal | null> {
   return view<TimelockedPolicyProposal | null>("get_policy_proposal");
+}
+
+export function fetchActivePositions(): Promise<Position[]> {
+  return view<Position[]>("get_active_positions");
+}
+
+export function fetchDerivedEvmAddress(path?: string): Promise<string> {
+  return view<string>("get_derived_evm_address", { path });
 }
 
 export function fetchFtBalance(token: string, accountId: string): Promise<string> {

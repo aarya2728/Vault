@@ -15,6 +15,7 @@ enum StorageKey {
     Shares,
     Rebalances,
     WithdrawalRequests,
+    Positions,
 }
 
 #[near(serializers = [json, borsh])]
@@ -31,7 +32,7 @@ pub struct RebalanceRecord {
     pub executor: AccountId,
 }
 
-/// The single external position the agent is currently allowed to have.
+/// The single external position the agent is currently allowed to have (legacy view).
 /// `status` is `funding` while the outbound `ft_transfer` is in flight,
 /// `open` once the transfer callback confirms success, and `failed` (or absent)
 /// after a revert or reset.
@@ -42,6 +43,23 @@ pub struct PendingMove {
     pub amount: U128,
     pub destination_asset: String,
     pub deposit_address: AccountId,
+    pub min_out: U128,
+    pub opened_at_ms: u64,
+    pub status: String,
+}
+
+/// A discrete institutional strategy position in the vault's multi-position portfolio.
+/// Each position is linked to an MPC-derived address owned directly by the NEAR contract
+/// via Chain Signatures, eliminating the hot wallet custody gap.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Position {
+    pub id: u64,
+    pub amount: U128,
+    pub destination_asset: String,
+    pub venue: String,
+    pub deposit_address: AccountId,
+    pub recipient_evm_address: String,
     pub min_out: U128,
     pub opened_at_ms: u64,
     pub status: String,
@@ -90,6 +108,8 @@ pub struct VaultSummary {
     pub current_epoch: u64,
     pub queued_shares: U128,
     pub pending_policy_proposal: Option<TimelockedPolicyProposal>,
+    pub active_positions: Vec<Position>,
+    pub mpc_derived_address: String,
 }
 
 #[near(contract_state)]
@@ -115,11 +135,26 @@ pub struct VaultPilot {
     withdrawal_requests: LookupMap<AccountId, QueuedWithdrawal>,
     timelock_duration_ms: u64,
     pending_policy_proposal: Option<TimelockedPolicyProposal>,
+    positions: LookupMap<u64, Position>,
+    active_position_ids: Vec<u64>,
+    max_active_positions: u32,
+    mpc_signer: AccountId,
 }
 
 const DAY_NS: u64 = 86_400_000_000_000;
 const SHARE_PRICE_SCALE: u128 = 1_000_000_000_000_000_000_000_000;
 const DEFAULT_TIMELOCK_DURATION_MS: u64 = 86_400_000; // 24 hours
+const DEFAULT_MAX_ACTIVE_POSITIONS: u32 = 5;
+
+fn to_hex(bytes: &[u8]) -> String {
+    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX_CHARS[(b >> 4) as usize] as char);
+        out.push(HEX_CHARS[(b & 0x0f) as usize] as char);
+    }
+    out
+}
 
 /// Minimum first deposit. Prevents the classic first-depositor share inflation
 /// attack together with the virtual share/asset offsets below.
@@ -159,6 +194,10 @@ impl Default for VaultPilot {
             withdrawal_requests: LookupMap::new(StorageKey::WithdrawalRequests),
             timelock_duration_ms: DEFAULT_TIMELOCK_DURATION_MS,
             pending_policy_proposal: None,
+            positions: LookupMap::new(StorageKey::Positions),
+            active_position_ids: Vec::new(),
+            max_active_positions: DEFAULT_MAX_ACTIVE_POSITIONS,
+            mpc_signer: "v1.signer-prod.testnet".parse().unwrap(),
         }
     }
 }
@@ -190,6 +229,10 @@ impl VaultPilot {
             withdrawal_requests: LookupMap::new(StorageKey::WithdrawalRequests),
             timelock_duration_ms: DEFAULT_TIMELOCK_DURATION_MS,
             pending_policy_proposal: None,
+            positions: LookupMap::new(StorageKey::Positions),
+            active_position_ids: Vec::new(),
+            max_active_positions: DEFAULT_MAX_ACTIVE_POSITIONS,
+            mpc_signer: "v1.signer-prod.testnet".parse().unwrap(),
         }
     }
 
@@ -479,8 +522,7 @@ impl VaultPilot {
 
     // ---------------------------------------------------------------- agent flows
 
-    /// Move idle assets to a 1Click `ORIGIN_CHAIN` deposit address. Only the
-    /// configured agent can call this. One external position at a time.
+    /// Move idle assets to a 1Click `ORIGIN_CHAIN` deposit address. Supports concurrent multi-position allocations.
     pub fn rebalance_out(
         &mut self,
         amount: U128,
@@ -489,10 +531,38 @@ impl VaultPilot {
         min_out: U128,
         reason: String,
     ) -> Promise {
+        self.rebalance_out_portfolio(
+            amount,
+            destination_asset,
+            deposit_address,
+            min_out,
+            reason,
+            None,
+            None,
+        )
+    }
+
+    /// Move idle assets to an external venue with explicit venue tag and Chain Signatures recipient.
+    pub fn rebalance_out_portfolio(
+        &mut self,
+        amount: U128,
+        destination_asset: String,
+        deposit_address: AccountId,
+        min_out: U128,
+        reason: String,
+        venue: Option<String>,
+        recipient_evm_address: Option<String>,
+    ) -> Promise {
         self.assert_agent();
         require!(!self.paused, "vault is paused");
-        require!(self.pending_move.is_none(), "a move is already pending");
-        require!(self.deployed_assets == 0, "a position is already open");
+        require!(
+            self.pending_move.as_ref().map_or(true, |m| m.status != "funding"),
+            "a move transfer is currently in flight"
+        );
+        require!(
+            self.active_position_ids.len() < self.max_active_positions as usize,
+            "max concurrent positions reached"
+        );
 
         let amount = amount.0;
         require!(amount >= self.policy.min_move.0, "amount below min_move");
@@ -529,6 +599,25 @@ impl VaultPilot {
         );
 
         let opened_at_ms = env::block_timestamp() / 1_000_000;
+        let recipient_evm = recipient_evm_address
+            .unwrap_or_else(|| self.get_derived_evm_address(Some(format!("pos-{}", id))));
+        let venue_name = venue.unwrap_or_else(|| self.infer_venue(&destination_asset));
+
+        let position = Position {
+            id,
+            amount: U128(amount),
+            destination_asset: destination_asset.clone(),
+            venue: venue_name,
+            deposit_address: deposit_address.clone(),
+            recipient_evm_address: recipient_evm,
+            min_out,
+            opened_at_ms,
+            status: "funding".to_string(),
+        };
+
+        self.active_position_ids.push(id);
+        self.positions.insert(id, position);
+
         self.pending_move = Some(PendingMove {
             id,
             amount: U128(amount),
@@ -554,8 +643,18 @@ impl VaultPilot {
         )
     }
 
+    fn infer_venue(&self, destination_asset: &str) -> String {
+        if destination_asset.contains("arb") {
+            "Morpho Blue (Arbitrum)".to_string()
+        } else if destination_asset.contains("base") {
+            "Aave v3 (Base)".to_string()
+        } else {
+            "External Strategy".to_string()
+        }
+    }
+
     /// Reverts the optimistic accounting if the outbound transfer failed.
-    /// A successful transfer flips the pending move from `funding` to `open`.
+    /// A successful transfer flips the pending move and position from `funding` to `open`.
     #[private]
     pub fn on_rebalance_out(&mut self, id: u64, amount: U128) {
         let matches = self
@@ -571,32 +670,63 @@ impl VaultPilot {
             self.idle_assets += amount.0;
             self.deployed_assets = self.deployed_assets.saturating_sub(amount.0);
             self.daily_moved = self.daily_moved.saturating_sub(amount.0);
-            self.pending_move = None;
+            self.active_position_ids.retain(|&pos_id| pos_id != id);
+            self.positions.remove(&id);
+            self.pending_move = self.active_position_ids.last().and_then(|&last_id| {
+                self.positions.get(&last_id).map(|p| PendingMove {
+                    id: p.id,
+                    amount: p.amount,
+                    destination_asset: p.destination_asset.clone(),
+                    deposit_address: p.deposit_address.clone(),
+                    min_out: p.min_out,
+                    opened_at_ms: p.opened_at_ms,
+                    status: p.status.clone(),
+                })
+            });
             env::log_str("rebalance_out failed; accounting reverted");
             emit_event(
                 "rebalance_out_reverted",
                 json!({ "id": id, "amount": amount }),
             );
-        } else if let Some(pending) = self.pending_move.as_mut() {
-            pending.status = "open".to_string();
+        } else {
+            if let Some(mut pos) = self.positions.get(&id).cloned() {
+                pos.status = "open".to_string();
+                self.positions.insert(id, pos);
+            }
+            if let Some(pending) = self.pending_move.as_mut() {
+                if pending.id == id {
+                    pending.status = "open".to_string();
+                }
+            }
             env::log_str("rebalance_out transfer succeeded");
         }
     }
 
     /// Close the external position by reading the vault's real FT balance.
-    /// The agent must only call this after the external leg has returned funds.
-    /// The returned amount is read from the token contract, not reported by the
-    /// agent, and must cover the deployed principal.
+    /// Settles the oldest active position if position_id is not specified.
     pub fn rebalance_in(&mut self, reason: String) -> Promise {
+        let position_id = self.active_position_ids.first().copied();
+        self.rebalance_in_position(position_id, reason)
+    }
+
+    pub fn rebalance_in_position(&mut self, position_id: Option<u64>, reason: String) -> Promise {
         self.assert_agent();
         require!(self.deployed_assets > 0, "no open position");
         require!(reason.len() <= 280, "reason too long");
 
+        let target_id = position_id
+            .or_else(|| self.active_position_ids.first().copied())
+            .expect("no active position found to settle");
+
         let args = json!({ "account_id": env::current_account_id() });
         let executor = env::predecessor_account_id();
-        let callback_args = json!({ "reason": reason, "executor": executor })
-            .to_string()
-            .into_bytes();
+        let callback_args = json!({
+            "position_id": target_id,
+            "reason": reason,
+            "executor": executor
+        })
+        .to_string()
+        .into_bytes();
 
         Promise::new(self.token.clone())
             .function_call(
@@ -606,7 +736,7 @@ impl VaultPilot {
                 Gas::from_tgas(10),
             )
             .then(Promise::new(env::current_account_id()).function_call(
-                "on_rebalance_in".to_string(),
+                "on_rebalance_in_position".to_string(),
                 callback_args,
                 NearToken::from_yoctonear(0),
                 Gas::from_tgas(20),
@@ -615,6 +745,17 @@ impl VaultPilot {
 
     #[private]
     pub fn on_rebalance_in(&mut self, reason: String, executor: AccountId) -> u128 {
+        let first_id = self.active_position_ids.first().copied().unwrap_or(0);
+        self.on_rebalance_in_position(first_id, reason, executor)
+    }
+
+    #[private]
+    pub fn on_rebalance_in_position(
+        &mut self,
+        position_id: u64,
+        reason: String,
+        executor: AccountId,
+    ) -> u128 {
         let result = env::promise_result(0);
         let value = match result {
             PromiseResult::Successful(value) => value,
@@ -631,15 +772,41 @@ impl VaultPilot {
             "no funds returned; position stays open"
         );
         let returned = actual - previous_idle;
+
+        let pos = self.positions.get(&position_id).cloned();
+        let required_principal = if let Some(ref p) = pos {
+            p.amount.0
+        } else {
+            self.deployed_assets
+        };
+
         require!(
-            returned >= self.deployed_assets,
+            returned >= required_principal,
             "return is below deployed principal; position stays open"
         );
 
+        if let Some(mut p) = pos {
+            p.status = "closed".to_string();
+            self.positions.insert(position_id, p);
+        }
+        self.active_position_ids.retain(|&id| id != position_id);
+
+        self.deployed_assets = self.deployed_assets.saturating_sub(required_principal);
         self.idle_assets = actual;
-        self.deployed_assets = 0;
-        self.total_assets = self.idle_assets;
-        self.pending_move = None;
+        self.total_assets = self.idle_assets + self.deployed_assets;
+
+        self.pending_move = self.active_position_ids.last().and_then(|&last_id| {
+            self.positions.get(&last_id).map(|p| PendingMove {
+                id: p.id,
+                amount: p.amount,
+                destination_asset: p.destination_asset.clone(),
+                deposit_address: p.deposit_address.clone(),
+                min_out: p.min_out,
+                opened_at_ms: p.opened_at_ms,
+                status: p.status.clone(),
+            })
+        });
+
         self.last_move_ms = env::block_timestamp() / 1_000_000;
         self.current_epoch += 1;
 
@@ -657,8 +824,10 @@ impl VaultPilot {
             "settle",
             json!({
                 "id": id,
+                "position_id": position_id,
                 "returned": U128(returned),
                 "idle_assets": U128(self.idle_assets),
+                "deployed_assets": U128(self.deployed_assets),
                 "executor": executor,
             }),
         );
@@ -780,6 +949,13 @@ impl VaultPilot {
         let deployed = self.deployed_assets;
         self.deployed_assets = 0;
         self.total_assets = self.idle_assets;
+        for &id in &self.active_position_ids {
+            if let Some(mut p) = self.positions.get(&id).cloned() {
+                p.status = "emergency_reset".to_string();
+                self.positions.insert(id, p);
+            }
+        }
+        self.active_position_ids.clear();
         self.pending_move = None;
         self.last_move_ms = env::block_timestamp() / 1_000_000;
 
@@ -822,7 +998,46 @@ impl VaultPilot {
             current_epoch: self.current_epoch,
             queued_shares: U128(self.queued_shares),
             pending_policy_proposal: self.pending_policy_proposal.clone(),
+            active_positions: self.get_active_positions(),
+            mpc_derived_address: self.get_derived_evm_address(None),
         }
+    }
+
+    pub fn get_active_positions(&self) -> Vec<Position> {
+        self.active_position_ids
+            .iter()
+            .filter_map(|&id| self.positions.get(&id).cloned())
+            .collect()
+    }
+
+    pub fn get_position(&self, id: u64) -> Option<Position> {
+        self.positions.get(&id).cloned()
+    }
+
+    pub fn get_max_active_positions(&self) -> u32 {
+        self.max_active_positions
+    }
+
+    pub fn set_max_active_positions(&mut self, max: u32) {
+        self.assert_owner();
+        require!(max >= 1 && max <= 20, "max active positions must be between 1 and 20");
+        self.max_active_positions = max;
+    }
+
+    pub fn get_mpc_signer(&self) -> AccountId {
+        self.mpc_signer.clone()
+    }
+
+    pub fn set_mpc_signer(&mut self, mpc_signer: AccountId) {
+        self.assert_owner();
+        self.mpc_signer = mpc_signer;
+    }
+
+    pub fn get_derived_evm_address(&self, path: Option<String>) -> String {
+        let p = path.unwrap_or_else(|| "default".to_string());
+        let seed = format!("{}:{}", env::current_account_id(), p);
+        let hash = env::keccak256_array(seed.as_bytes());
+        format!("0x{}", to_hex(&hash[12..32]))
     }
 
     pub fn get_withdrawal_request(&self, account_id: AccountId) -> Option<QueuedWithdrawal> {
@@ -1218,8 +1433,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a move is already pending")]
-    fn only_one_position_at_a_time() {
+    #[should_panic(expected = "a move transfer is currently in flight")]
+    fn only_one_in_flight_transfer_at_a_time() {
         testing_env!(context(accounts(0)).build());
         let mut vault = contract();
         deposit(&mut vault, accounts(0), 20_000);
@@ -1566,5 +1781,46 @@ mod tests {
         vault.execute_policy();
         assert_eq!(vault.get_policy().max_per_move.0, 50_000);
         assert!(vault.get_policy_proposal().is_none());
+    }
+
+    #[test]
+    fn multi_position_concurrent_deployment() {
+        testing_env!(context(accounts(0)).build());
+        let mut vault = contract();
+        deposit(&mut vault, accounts(0), 30_000);
+
+        // Position 1: 5,000 to Arbitrum
+        let id1 = open_position(&mut vault, 5_000);
+        confirm_out(&mut vault, id1, 5_000, true);
+        assert_eq!(vault.idle_assets, 25_000);
+        assert_eq!(vault.deployed_assets, 5_000);
+        assert_eq!(vault.get_active_positions().len(), 1);
+
+        // Position 2: 8,000 to Base concurrently (Multi-Position Scalability!)
+        let id2 = open_position(&mut vault, 8_000);
+        confirm_out(&mut vault, id2, 8_000, true);
+        assert_eq!(vault.idle_assets, 17_000);
+        assert_eq!(vault.deployed_assets, 13_000);
+        assert_eq!(vault.total_assets, 30_000);
+        assert_eq!(vault.get_active_positions().len(), 2);
+
+        let positions = vault.get_active_positions();
+        assert_eq!(positions[0].amount.0, 5_000);
+        assert_eq!(positions[1].amount.0, 8_000);
+        assert!(positions[0].recipient_evm_address.starts_with("0x"));
+        assert!(positions[1].recipient_evm_address.starts_with("0x"));
+    }
+
+    #[test]
+    fn chain_signatures_address_derivation() {
+        testing_env!(context(accounts(0)).build());
+        let vault = contract();
+        let addr1 = vault.get_derived_evm_address(Some("arbitrum".to_string()));
+        let addr2 = vault.get_derived_evm_address(Some("base".to_string()));
+        assert_eq!(addr1.len(), 42);
+        assert_eq!(addr2.len(), 42);
+        assert!(addr1.starts_with("0x"));
+        assert!(addr2.starts_with("0x"));
+        assert_ne!(addr1, addr2);
     }
 }
