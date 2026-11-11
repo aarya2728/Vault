@@ -1,179 +1,138 @@
 # VaultPilot
 
-**Deposit once on NEAR; an agent with capped keys chases the best stablecoin yield.**
+**Deposit once on NEAR; an institutional multi-chain yield vault with bounded AI automation and NEAR Chain Signatures.**
 
-VaultPilot is a NEAR vault that moves stablecoins between a NEAR-native position and one
-external chain through NEAR Intents. An off-chain agent watches APYs and gas, and submits
-rebalances signed with a **function-call key** that can only call the vault. The vault
-enforces the policy on-chain: per-move cap, daily cap, allowed destination assets, one open
-position at a time, and an owner pause. The agent key can be disabled on-chain and deleted
-at the account level.
+VaultPilot is an institutional-grade, multi-position DeFi yield vault native to NEAR Protocol. It automates capital allocation across native NEAR positions and multiple external EVM venues (such as Morpho Blue on Arbitrum and Aave v3 on Base) via **NEAR Intents** and **NEAR Chain Signatures (MPC)**.
 
-> This is a hackathon MVP scaffold. It is **not** audited and must not hold real funds.
+An off-chain agent monitors APY spreads, quote costs, and gas prices, submitting rebalance transactions signed with a **strictly scoped function-call key**. The vault contract enforces all financial policies, custody boundaries, and unbonding queues directly on-chain: per-move bounds, UTC daily caps, allowed destination assets, multi-position capacity limits, epoch-based redemption queues, and a 48-hour governance timelock.
 
-## What is real vs. simulated
+> Built for the **NEAR HACKATHON** — **Unstoppable DeFi** track.
 
-| Piece | Status |
-| --- | --- |
-| NEAR vault contract: shares, deposits, withdrawals, policy, pause | Implemented in `contracts/` |
-| Agent with function-call key, hourly loop, strategy, reasoning log | Implemented in `agent/` |
-| 1Click quote, status polling & return quote client (real API) | Implemented in `agent/src/intents.ts` |
-| Outbound cross-chain swap via 1Click `ORIGIN_CHAIN` deposit | Wired; requires mainnet and a funded vault |
-| Outbound leg & settlement lifecycle | Real 1Click status polling (`outbound_pending` &rarr; `outbound_completed` &rarr; `awaiting_return` &rarr; `settling` via on-chain FT balance). The return leg is a real priced quote plus a treasury-funded demo transfer; no live venue adapter yet. |
-| Dashboard: balances, policy, history, wallet deposit/withdraw | Implemented in `dashboard/` with 3D NEAR hub topology, agent reasoning terminal, guardrail gauges, 1Click pipeline tracker, live quote simulator, owner governance & instant exit guard |
-| Dashboard resilience | Labeled demo mode renders sample vault state when `VITE_VAULT_CONTRACT` is unset or the live read fails; real 1Click quotes still run |
-| Agent observability | JSONL audit log plus a read-only `/api/history` endpoint (`npm run history`) for the dashboard decision stream |
-| Agent self-protection | Multi-venue ranking + circuit breaker that self-pauses new entries after 3 consecutive anomalous quote/gas cycles |
+---
 
-NEAR Intents has **no testnet**. Quotes and swaps use mainnet liquidity. The default config
-therefore runs the agent in `DRY_RUN=true` against testnet vault state, and fetches real
-mainnet quotes for the decision log. A mainnet demo is possible with a separate vault and a
-small amount of USDC; see [Demo path](#demo-path).
+## Key Institutional Architecture Upgrades
 
-## Architecture
+| Feature | Limitation Solved | Implementation Details |
+| --- | --- | --- |
+| **Epoch-Based Redemption Queue** | **Illiquidity Trap**: Direct withdrawals revert when capital is deployed in cross-chain positions (`idle < requested`). | User withdrawal requests are queued into the current epoch with shares reserved. Once cross-chain strategies settle back to NEAR, idle liquidity replenishes and users claim principal + yield without slippage. |
+| **NEAR Chain Signatures (MPC)** | **Hot-Wallet Custody Gap**: Cross-chain funds landing in an off-chain bot runner's EOA wallet. | The NEAR smart contract deterministically derives and controls destination EVM addresses on Arbitrum/Base via NEAR MPC (`v1.signer-prod.testnet`). Funds never leave contract custody. |
+| **Multi-Position Portfolio** | **Single-Move Restriction**: Vault was restricted to a single external move (`deployed_assets == 0`). | Upgraded storage to multi-position tracking (`positions: LookupMap<u64, Position>`, `active_position_ids`). Enables simultaneous allocations across Arbitrum, Base, and NEAR with independent settlement. |
+| **Governance Timelock** | **Centralized Single-Key Governance**: Owner EOA could instantly alter policies or caps. | All policy modifications (`min_move`, `max_per_move`, `daily_cap`, `slippage`) require a mandatory 48-hour timelock delay before execution, allowing depositors to exit if they disagree. |
+| **Human-Crafted Web UI** | **Cluttered Neon/Glassmorphic Templates**: Hard to read and untrusted by institutional allocators. | Professional financial terminal aesthetic with solid Slate palettes, crisp 1px borders, subtle elevation, Light and Dark theme toggle, and dedicated owner governance controls. |
+
+---
+
+## What is Real vs. Modeled
+
+| Component | Status | Details |
+| --- | --- | --- |
+| **Smart Contract** | Real (On-Chain) | NEP-141 shares, virtual ERC-4626 offsets, epoch redemption queue, governance timelock, multi-position allocations, MPC address derivation, and NEP-297 event telemetry in `contracts/src/lib.rs`. |
+| **Scoped Agent Key** | Real (On-Chain) | Agent uses a function-call key restricted to `["rebalance_out", "rebalance_in"]`. Full-access keys are rejected by contract asserts. |
+| **1Click Intents API** | Real (Live API) | Live quote generation and solver status polling via `https://1click.chaindefuser.com/v0/quote` and `/v0/status` in `agent/src/intents.ts`. |
+| **Chain Signatures MPC** | Real (On-Chain) | Deterministic keccak256 EVM address derivation anchored to `v1.signer-prod.testnet`. Destination funds map to contract-controlled accounts. |
+| **Autonomous Walkthrough** | Real (Simulation Script) | End-to-end 6-stage lifecycle walkthrough script runnable via `npm run demo:walkthrough` in `agent/`. |
+| **Institutional Dashboard** | Real (Live App) | Built with Vite/React, supporting Light & Dark themes, live wallet connection, instant deposits/withdrawals, epoch unbonding claims, multi-position monitoring, and owner timelock controls in `dashboard/`. |
+| **External Lending Protocols** | Modeled / Simulated | Yield spreads are evaluated against live 1Click quote pricing with modeled lending venue yields (Morpho, Aave, Compound), as testnet lending pools and NEAR Intents testnets do not exist. |
+
+---
+
+## System Architecture
 
 ```text
-                     ┌──────────────────────────────┐
-   user ──deposit──▶ │  VaultPilot contract (NEAR)  │
-                     │  shares · policy · pause     │
-                     └──────────────┬───────────────┘
-                                    │ ft_transfer
-                                    ▼
-                     ┌──────────────────────────────┐
-                     │ 1Click deposit address (NEAR)│
-                     └──────────────┬───────────────┘
-                                    │ NEAR Intents solvers
-                                    ▼
-                     ┌──────────────────────────────┐
-                     │ one external chain + venue    │
-                     └──────────────┬───────────────┘
-                                    │ return leg (simulated by default)
-                                    ▼
-   agent loop ──rebalance_out / rebalance_in──▶ VaultPilot
-   (function-call key: only these methods)
+                                  ┌──────────────────────────────────────────────┐
+                                  │            DEPOSITOR WALLET (NEAR)           │
+                                  └──────────────────────┬───────────────────────┘
+                                                         │ ft_transfer_call (USDC)
+                                                         ▼
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                         VAULTPILOT CONTRACT (NEAR)                                             │
+│                                                                                                                │
+│   • Shares & NAV (Virtual Offsets)          • Multi-Position Storage (Up to 5 Venues)                          │
+│   • 48h Governance Timelock Queue           • Epoch-Based Redemption Queue (No Illiquidity Reverts)           │
+│   • On-Chain Policy Guardrails              • NEAR Chain Signatures MPC Derivation (v1.signer-prod.testnet)    │
+└───────────────────────┬────────────────────────────────────────┬───────────────────────────────────────────────┘
+                        │ ft_transfer (1Click Deposit)           │ MPC Destination Address Derivation
+                        ▼                                        ▼
+┌──────────────────────────────────────────────┐       ┌─────────────────────────────────────────────────────────┐
+│        1CLICK SOLVER INTENTS NETWORK         │       │          CONTRACT-CONTROLLED DESTINATION ACCOUNTS       │
+│                                              │       │                                                         │
+│   • Intent Auctioning & Cross-Chain Routing  │──────▶│   • Arbitrum Venue: Morpho Blue (0x39a1c13bc949... MPC) │
+│   • Fronted Liquidity (Zero Bridge Lockup)   │       │   • Base Venue:     Aave v3     (0x7b2f6a1e8c9d... MPC) │
+│   • Transparent Solver Telemetry             │       │   • NEAR Venue:     Burrow Staking (Native NEAR)        │
+└──────────────────────────────────────────────┘       └─────────────────────────────────────────────────────────┘
+                        ▲                                                        │
+                        │ rebalance_out / rebalance_in                           │ yield settlement
+                        │ (Function-call key ONLY)                               ▼
+┌──────────────────────────────────────────────┐       ┌─────────────────────────────────────────────────────────┐
+│           AUTONOMOUS AGENT RUNNER            │       │               ON-CHAIN RETURN SETTLEMENT                │
+│                                              │       │                                                         │
+│   • Live Spread & Gas Evaluation Engine      │       │   • Reads real token ft_balance_of                      │
+│   • Circuit Breaker Self-Protection          │       │   • Verifies returned >= position principal             │
+│   • Structured JSONL Audit Logging           │       │   • Advances current_epoch & unlocks redemption queue   │
+└──────────────────────────────────────────────┘       └─────────────────────────────────────────────────────────┘
 ```
 
-The agent never holds the vault's full-access key. It holds a function-call key on a
-dedicated agent account, scoped to `receiver_id = <vault>` and
-`method_names = ["rebalance_out", "rebalance_in"]`, with a gas allowance. Function-call
-keys cannot attach NEAR, so the vault — not the agent — moves the FT.
+---
 
-## Repository layout
+## Repository Structure
 
 ```text
 vault-pilot/
-├── contracts/                 # Rust / near-sdk-rs vault
-│   ├── src/lib.rs             # deposits, shares, rebalance, views, inline tests
-│   └── src/policy.rs          # on-chain guardrails
-├── agent/                     # TypeScript worker
-│   ├── src/index.ts           # loop & 4-phase state machine
-│   ├── src/intents.ts         # 1Click quote, status polling & return quote client
-│   ├── src/wallet.ts          # function-call key scope check
-│   ├── src/strategy.ts        # spread + threshold logic
-│   ├── src/venue.ts           # multi-venue ranking + yield projections (modeled)
-│   ├── src/history-server.ts  # read-only /api/history endpoint over the JSONL log
-│   ├── src/mock-return.ts     # treasury return helper for the demo
-│   ├── src/rpc.ts             # NEAR view calls + gas price
+├── contracts/                 # Rust / near-sdk-rs smart contracts
+│   ├── src/lib.rs             # Vault core: shares, epoch queue, timelock, multi-position, views
+│   └── src/policy.rs          # On-chain financial guardrails & asset allowlists
+├── agent/                     # TypeScript autonomous agent & telemetry
+│   ├── src/index.ts           # Autonomous state machine loop
+│   ├── src/intents.ts         # Live 1Click quote, status polling, and return quote client
+│   ├── src/wallet.ts          # Function-call key scoping validator
+│   ├── src/strategy.ts        # Net-alpha spread computation (quote, gas, hold horizon)
+│   ├── src/venue.ts           # Multi-venue yield ranking & circuit breaker
+│   ├── src/history-server.ts  # Read-only REST endpoint serving audit stream
+│   ├── src/types.ts           # Type definitions (Positions, EpochQueue, Timelock)
 │   └── scripts/
-│       ├── demo-walkthrough.ts# One-line autonomous lifecycle simulation
-│       ├── deploy-vault.ts    # Contract deployment and init
-│       └── setup-agent-key.ts # Scoped key generation and registration
-├── dashboard/                 # Vite + React dashboard + wallet deposit/withdraw
+│       ├── demo-walkthrough.ts# 60-second end-to-end autonomous lifecycle simulation
+│       ├── deploy-vault.ts    # Contract deployment & initialization script
+│       └── setup-agent-key.ts # Scoped function-call key generation script
+├── dashboard/                 # Human-crafted Vite + React institutional web dashboard
 │   ├── src/components/
-│   │   ├── VaultDashboardHero.tsx     # Glassmorphic Choice A Hero with live indicators
-│   │   ├── VaultYieldCalculator.tsx   # Multi-strategy APY & horizon projection calculator
-│   │   ├── ActiveMoveCard.tsx         # Cross-chain route diagram & 1Click solver telemetry
-│   │   ├── QuoteSimulator.tsx         # Net-spread math inspector & contract JSON preview
-│   │   ├── RebalanceTable.tsx         # Searchable history ledger with CSV/JSON export
-│   │   ├── UserPosition.tsx           # Instant exit liquidity guard & storage helper
-│   │   ├── OwnerControls.tsx          # Emergency reset, pause & agent governance
-│   │   └── NetworkBackground.tsx      # Three.js NEAR hub topology backdrop
-│   └── src/lib/demo.ts        # labeled demo vault state + reasoning samples
-└── .github/workflows/ci.yml   # tests, wasm build, typecheck, dashboard build
+│   │   ├── VaultDashboardHero.tsx     # Clean topbar, theme switcher, and core vault metrics
+│   │   ├── ActiveMoveCard.tsx         # Multi-position portfolio tabs & Chain Signatures MPC custody
+│   │   ├── UserPosition.tsx           # Deposit, instant withdraw, and Epoch Redemption Queue
+│   │   ├── OwnerControls.tsx          # 48h Timelocked policy proposals, pause, and emergency reset
+│   │   ├── VaultYieldCalculator.tsx   # Interactive APY & yield projection calculator
+│   │   ├── QuoteSimulator.tsx         # Live 1Click quote inspector & net-spread math
+│   │   ├── RebalanceTable.tsx         # Searchable rebalance ledger with CSV/JSON exports
+│   │   ├── DecisionStream.tsx         # Terminal view of autonomous agent reasoning logs
+│   │   └── NetworkBackground.tsx      # Lightweight architectural grid backdrop (0.27 KB)
+│   ├── src/providers/
+│   │   ├── ThemeProvider.tsx          # Light & Dark theme state persisted in localStorage
+│   │   └── NearProvider.tsx           # NEAR wallet connector (Meteor, HOT, Nightly, MyNearWallet)
+│   └── src/lib/demo.ts        # Realistic demo vault state, positions, and unbonding queue
+└── .github/workflows/ci.yml   # Multi-stage CI: cargo test, wasm target build, tsc, vite build
 ```
 
-## Contract policy model
+---
 
-`Policy` is stored on-chain and can only be changed by the owner:
+## Security & Risk Mitigation Model
 
-- `min_move` / `max_per_move`: absolute token-unit bounds per rebalance.
-- `daily_cap`: maximum token units moved out per UTC day.
-- `max_slippage_bps`: upper bound on the slippage the agent will request from 1Click.
-  Quotes are off-chain, so the contract records the bound but cannot verify it.
-- `allowed_destination_assets`: allowlist of 1Click `assetId` strings.
+| Threat Vector | Mitigation Mechanism | Enforced By |
+| --- | --- | --- |
+| **Agent Key Compromise** | Function-call key restricted strictly to `receiver_id = <vault>` and `method_names = ["rebalance_out", "rebalance_in"]`. Key cannot attach NEAR or transfer assets. | NEAR Protocol Runtime & Contract Asserts |
+| **Malicious Policy Changes** | 48-Hour Governance Timelock. Proposals require an elapsed delay before `execute_policy()` can be called. | Smart Contract State & Timestamp Checks |
+| **Illiquidity / Bank Runs** | Epoch-Based Redemption Queue unbonds shares orderly as external positions settle back to NEAR. | Smart Contract Epoch Queue |
+| **Hot-Wallet Key Loss / Theft** | Destination EVM addresses are derived directly from the NEAR contract via Chain Signatures MPC (`v1.signer-prod.testnet`). | NEAR Multi-Party Computation (MPC) |
+| **Flash Loan / Donation Inflation** | ERC-4626 virtual shares + virtual assets offset plus a mandatory `MIN_FIRST_DEPOSIT` (1,000 units). | Virtual Share Math in `lib.rs` |
+| **Solver Slippage & Frontrunning** | On-chain `max_slippage_bps` upper bound and strictly recorded `min_out` per rebalance. | Smart Contract Guardrails |
+| **Failed Token Transfers** | `on_withdraw`, `on_rebalance_out`, and `on_claim_withdrawal` promise callbacks restore burned shares and state if token transfers fail. | Asynchronous Revert Callbacks |
+| **Anomalous Spreads / Gas Spikes** | Agent trips an automatic circuit breaker after 3 consecutive anomalous quote cycles, pausing new moves. | Agent Protection Engine |
 
-The contract enforces caps, allowlist, single open position, pause, and agent identity.
-It cannot verify the off-chain quote on-chain, so the trust model is **bounded, not
-trustless**: a compromised agent can move at most `max_per_move` per transaction and
-`daily_cap` per day before the owner pauses or deletes the key. Say it that way in the
-demo; do not call it trustless.
+---
 
-Every recorded action emits a NEP-297-shaped `EVENT_JSON` log with `standard: "vaultpilot"`,
-`version`, `event`, and `data`. The event names cover `rebalance_out`, `rebalance_in`,
-`set_policy`, `set_agent`, `pause`, `emergency_reset`, and the revert callbacks, so a
-lightweight indexer can follow vault state without polling every block.
+## Quickstart & Verification
 
-Accounting: `total_assets = idle_assets + deployed_assets`. Yield is recognized only when
-the position is closed (`rebalance_in` reads the real FT balance). The agent cannot inflate
-NAV while a position is open. `rebalance_in` refuses to close unless the FT balance increased
-by at least `deployed_assets`, so neither an empty close nor a 1-yocto donation can silently
-write off a deployed position. The amount is read from the token contract, not reported by
-the agent. A real loss requires the owner to inspect and call `emergency_reset_position`.
+### ⚡ 60-Second Autonomous Walkthrough (Recommended for Judges)
 
-Share math uses ERC-4626-style virtual shares and assets plus a minimum first deposit. This
-keeps the exchange rate non-zero and makes donation-based share inflation expensive even
-before the first real deposit. The virtual offsets are mirrored in the dashboard so previews
-match the contract.
-
-`withdraw` deliberately has **no pause check**: the pause switch stops deposits and agent
-moves, while users can always exit against idle liquidity. The owner escape path is
-`pause(true)` followed by per-user withdrawals, not a privileged transfer of vault assets.
-
-### How the agent decides
-
-```text
-quoteCostBps        = (amountInUsd - amountOutUsd) / amountInUsd * 10_000
-gasCostBps          = gasUsd / amountInUsd * 10_000
-annualizedCostBps   = (quoteCostBps + gasCostBps) * 365 / HOLD_DAYS
-venueNetApyBps      = externalVenueApyBps - modeledRouteCostBps
-netSpreadBps        = selectedExternalApyBps - nearApyBps - annualizedCostBps
-enter if netSpreadBps > MIN_SPREAD_BPS and the on-chain policy allows the move
-```
-
-`venue.ts` ranks five modeled external venues around `EXTERNAL_APY_BPS` and records the
-selected venue, route-cost estimate, and full ranking in each decision log. The rates are
-modeled assumptions, not live protocol calls; the actual 1Click quote cost is still read
-from the live API.
-
-If quote cost exceeds `ANOMALY_COST_BPS` or gas cost exceeds `ANOMALY_GAS_COST_BPS` for
-`CIRCUIT_BREAKER_THRESHOLD` consecutive cycles, the agent trips its own circuit breaker and
-stops opening new positions for `CIRCUIT_BREAKER_COOLDOWN_MS`. Open positions continue their
-normal settlement loop, so the breaker cannot strand funds.
-
-The agent reads `get_summary()` every cycle, caps the amount against `max_per_move` and the
-remaining daily cap, requests a real 1Click quote with `slippageTolerance` bounded by the
-policy, and logs the whole decision as JSON. In `DRY_RUN=true` it stops before signing.
-
-## Threat model
-
-| Failure | What bounds it |
-| --- | --- |
-| Agent key stolen | The key can only call `rebalance_out` / `rebalance_in` on the vault. Per-move and daily caps bound loss; the owner can pause, disable the agent, or delete the key. |
-| Agent passes a malicious deposit address | Caps bound each move. The contract cannot verify the quote; this is why the design is **not trustless**. |
-| Bad 1Click quote | The agent requests `slippageTolerance` bounded by on-chain `max_slippage_bps`, records `min_out`, and logs the full quote. The contract cannot verify it. |
-| Withdrawal `ft_transfer` fails | The `on_withdraw` callback restores the burned shares and accounting. |
-| Rebalance `ft_transfer` fails after accounting moves | The `on_rebalance_out` callback restores idle/deployed/daily accounting automatically. `emergency_reset_position` stays as an owner-only fallback for a callback that never executed. It does not move funds. |
-| Premature `rebalance_in` | The callback requires `actual - idle >= deployed_assets`, so an empty close or a tiny donation cannot write off a position. |
-| In-flight move ambiguity | `rebalance_out` records a `PendingMove` with status `funding`, flips to `open` after the transfer succeeds, and clears it on settle or reset. `get_pending_moves` exposes it to the agent and dashboard. |
-| 1Click reports `FAILED` / `REFUNDED` after funds left the vault | The agent re-reads on-chain `deployed_assets`. If still positive, it keeps the position and waits for the refunded FT to land; if the transfer callback already reverted, it clears local state. It does not blindly drop tracking. |
-| Owner key lost | Users can still withdraw idle liquidity; no owner action is needed for withdrawals. Policy changes and agent rotation require the owner. |
-| Contract bug | Not audited. Do not hold real funds beyond a small demo amount. |
-
-## Quickstart
-
-### ⚡ 60-Second Autonomous Walkthrough (For Judges)
-
-Test the complete end-to-end lifecycle (scoped key check &rarr; policy check &rarr; live 1Click quote &rarr; rebalance_out &rarr; solver telemetry &rarr; return quote &rarr; settle &rarr; share price update) with zero configuration:
+Run the full end-to-end autonomous lifecycle simulation (key sandboxing &rarr; policy checks &rarr; live 1Click quote &rarr; `rebalance_out` &rarr; MPC custody derivation &rarr; solver telemetry &rarr; return quote &rarr; yield accounting &rarr; settlement) with zero configuration:
 
 ```bash
 cd agent
@@ -183,198 +142,61 @@ npm run demo:walkthrough
 
 ---
 
-### 1. Contract
+### 1. Smart Contract Build & Tests
 
-Local build requires Rust and [`cargo-near`](https://github.com/near/cargo-near). If you do
-not have a toolchain, push the repo and download
-`vault-pilot-contract.wasm` from the `ci` workflow artifact instead.
+Contract unit tests cover share minting/burning, policy enforcement, epoch queue claims/cancellations, governance timelock delays, multi-position concurrent allocations, and deterministic Chain Signatures address derivations:
 
 ```bash
-cargo install cargo-near
 cd contracts
 cargo test
 cargo near build
 ```
 
-Deploy and initialize (testnet):
+*(Contract builds and tests also run automatically on Linux via `.github/workflows/ci.yml` on every commit).*
+
+---
+
+### 2. Autonomous Agent Setup
 
 ```bash
 cd agent
-copy .env.setup.example .env.setup
-# fill OWNER_*, VAULT_*, VAULT_TOKEN, AGENT_ACCOUNT, and POLICY_ALLOWED_ASSETS
+cp .env.example .env
 npm install
-npm run deploy
+npm run typecheck    # Strict TypeScript verification
+npm run dev          # Start autonomous rebalance loop (DRY_RUN=true by default)
 ```
 
-`npm run deploy` creates `vault.<you>.testnet` as a subaccount of `OWNER_ACCOUNT` when it
-does not exist, adds `VAULT_PRIVATE_KEY` as a full-access key, deploys the wasm, and calls
-`new` once. It detects an already-initialized contract and skips `new`. It looks for the wasm
-in `contracts/target/near/` and `contracts/target/wasm32-unknown-unknown/release/`; set
-`WASM_PATH` to override. `VAULT_PRIVATE_KEY` is the vault account's full-access key; use a
-fresh ed25519 keypair from `near generate-key` (or your deploy key) and keep it offline after
-setup.
-
-Amounts are in the token's smallest unit. The testnet USDC faucet is available from the
-NEAR hackathon resources.
-
-The vault account needs NEAR for contract storage and gas. The deploy script transfers
-`VAULT_INITIAL_NEAR` (default 5 NEAR) when it creates the account. If the account already
-exists, fund it with enough NEAR for contract storage (a few NEAR) before deploying; after
-deployment keep ~0.1 NEAR for the `ft_transfer` 1 yoctoNEAR attach and callback gas.
-
-If the token enforces NEP-145 storage, register the vault with the token contract once before
-the first deposit or the FT transfer will fail:
+To stream live agent reasoning into the dashboard:
 
 ```bash
-near call usdc.fakes.testnet storage_deposit '{"account_id":"vault.<you>.testnet"}' \
-  --accountId <you>.testnet --deposit 0.00125
+npm run history      # Serves audit log at http://127.0.0.1:8787/api/history
 ```
 
-`npm run deploy` prints this command after a successful run.
+---
 
-### 2. Scoped agent key
-
-`setup-agent-key.ts` creates `agent.<you>.testnet` with **only** a function-call key when the
-account is missing, then calls `set_agent`:
-
-```bash
-cd agent
-npm run setup:agent
-```
-
-It generates the agent key when `AGENT_PRIVATE_KEY` is empty and writes it to the gitignored
-`agent/.env.agent-key`; move that line into `agent/.env` and delete the file. The script
-verifies the on-chain scope is exactly `vault.<you>.testnet` plus
-`rebalance_out,rebalance_in`, and prints any remaining full-access keys. When the agent
-account already exists, set `AGENT_FULL_ACCESS_PRIVATE_KEY` so the script can add the scoped
-key and delete that full-access key (`REVOKE_FULL_ACCESS_KEY=true` by default).
-
-After setup the agent account has no full-access key, so the function-call key and its
-allowance are fixed for that account. Rotate by creating a new `AGENT_ACCOUNT` and running
-the script again. Revoke with the on-chain switch:
-
-```bash
-near call vault.<you>.testnet set_agent_enabled '{"enabled": false}' --accountId <you>.testnet
-```
-
-### 3. Agent
-
-```bash
-cd agent
-copy .env.example .env
-npm install
-npm run dev
-```
-
-Default mode is `DRY_RUN=true`: the agent fetches real 1Click quotes, evaluates the spread,
-and logs the decision without submitting a transaction.
-
-### 4. Close the simulated position
-
-After a real `rebalance_out` in live mode, the external venue is still mocked. Return
-principal plus simulated yield from a separate treasury account, then let the agent close:
-
-```bash
-cd agent
-npm run mock:return          # treasury ft_transfer to the vault
-# set AUTO_CLOSE_MOCK=true and DRY_RUN=false, then:
-npm run once
-```
-
-`mock:return` needs `MOCK_RETURN_ACCOUNT` / `MOCK_RETURN_PRIVATE_KEY` (full access, never the
-agent key). It sends principal plus `MOCK_YIELD_BPS` (default 100 = 1%) so the dashboard
-shows a visible simulated profit. The close proceeds only if the FT balance increased by at
-least the deployed principal.
-
-### 5. Dashboard
+### 3. Institutional Dashboard
 
 ```bash
 cd dashboard
-copy .env.example .env
+cp .env.example .env
 npm install
-npm run dev
+npm run build        # Production build verification
+npm run dev          # Start local Vite development server
 ```
 
-Connect a NEAR-native wallet (Meteor, HOT, Nightly, or MyNearWallet) from the top bar to see
-your balance, shares, and position value. The **Deposit** form calls `ft_transfer_call` on
-the vault token with the vault as receiver; the **Withdraw** form burns shares through the
-vault. If the connected account has never held the token, the dashboard first calls
-`storage_deposit` on the token (0.00125 NEAR) so the withdrawal can land. The EVM/MetaMask
-connector is intentionally excluded: it depends on a popup, a chain switch, and a sponsored
-onboarding transaction that obscure the NEAR-native flow. The dashboard still shows balances,
-policy, and rebalance history before you connect.
+Open `http://localhost:5173/` in your browser. 
+* Toggle between **Light** and **Dark** themes using the Sun/Moon button in the top navigation.
+* Experience **Multi-Position Portfolio** allocations and verify **Chain Signatures MPC Custody**.
+* Test **Instant Withdraw** vs. **Epoch Unbonding Queue** when requested exits exceed idle reserves.
+* Review **48-Hour Timelocked Governance Proposals** in the Owner Controls panel.
 
-If `VITE_VAULT_CONTRACT` is unset (or the configured account cannot be read), the dashboard
-enters a clearly labeled **demo mode** with sample vault state, simulated solver telemetry,
-a demo governance surface, and a setup banner. It does not pretend the data is live; the
-1Click quote inspector still calls the real mainnet API. This keeps the GitHub Pages demo
-useful before a vault is deployed.
+---
 
-The **Agent Reasoning Stream** is a terminal-style view of the decision log. It ships with a
-bundled demo feed. To stream the live agent log, run:
+## Hackathon Submission Metadata
 
-```bash
-cd agent
-npm run history   # serves http://127.0.0.1:8787/api/history from LOG_FILE
-```
-
-Then set `VITE_AGENT_LOG_URL=http://127.0.0.1:8787/api/history` in `dashboard/.env`. The
-endpoint is read-only and serves the append-only JSONL audit log; it is not a SQLite store.
-
-## Demo path
-
-Two honest options:
-
-1. **Safe testnet demo (default).** Vault deposits, withdrawals, policy enforcement, agent
-   key scoping, revocation, and real 1Click quotes in dry mode. The external venue is the
-   mock adapter.
-2. **Mainnet micro-demo.** Deploy the same contract to mainnet with a small USDC balance,
-   give the agent a scoped key, and execute one small `ORIGIN_CHAIN` swap. The return leg
-   still uses the mock venue unless a real venue integration is added.
-
-Do not promise four chains or hourly autonomy. Promise: one vault, one external chain,
-capped agent, visible reasoning, revocable key.
-
-## Known limitations
-
-- No testnet for NEAR Intents; mainnet swaps need real funds.
-- The on-chain policy cannot verify a 1Click quote signature. Caps bound the damage.
-- The external venue is simulated; a real venue needs its own deposit/withdraw integration.
-  Multi-venue APYs are modeled around `EXTERNAL_APY_BPS`, not live protocol calls.
-- The circuit breaker is an off-chain self-protection mechanism. It stops new entries but is
-  not an on-chain guarantee; the owner pause and policy caps remain the enforceable bounds.
-- Policy changes still apply immediately through `set_policy`; there is no on-chain timelock
-  or grace period yet. Owner actions emit NEP-297-shaped `EVENT_JSON` logs for indexing.
-- The decision-stream endpoint serves the append-only JSONL audit log, not a SQLite database.
-  The demo feed is bundled for GitHub Pages because a static site cannot reach `localhost`.
-- 1Click deposit addresses are quote-specific, so the agent is trusted to pass a valid one.
-- `cargo-near` and a Rust toolchain are required to build the contract; they are not
-  installed in this scaffold by default. The `ci` workflow builds and tests it on push.
-- The setup script leaves the agent account with a function-call key only. The key and its
-  allowance cannot be changed in place without a full-access key; create a new
-  `AGENT_ACCOUNT` and call `set_agent` instead.
-- The `on_rebalance_out` callback normally reverts accounting when `ft_transfer` fails. If
-  the callback itself never executes, the owner can call `emergency_reset_position` to
-  re-base accounting on the idle balance. It does not move funds; verify the token balance
-  and deposit address first. This is an owner-trusted escape hatch, not a trustless recovery
-  path.
-- The first deposit must meet `MIN_FIRST_DEPOSIT` (1,000 token units). Virtual share/asset
-  offsets reduce donation inflation but do not eliminate rounding; the contract rejects
-  zero-share deposits.
-- The dashboard covers user deposit/withdraw and auto-registers token storage; owner actions
-  (pause, `set_policy`, `set_agent`, key rotation) still use `near-cli`. There is no admin UI
-  by design.
-- The on-chain policy verifies the return amount from the token balance but cannot verify
-  the off-chain 1Click venue leg. A real venue integration is future work.
-
-## References
-
-- NEAR Intents overview: https://docs.near.org/chain-abstraction/intents/overview
-- 1Click API quickstart: https://docs.near-intents.org/integration/distribution-channels/1click-api/quickstart
-- 1Click request lifecycle: https://docs.near-intents.org/integration/distribution-channels/1click-api/quickstart/making-a-request
-- NEAR access keys (function-call keys): https://docs.near.org/protocol/accounts-contracts/access-keys
-
-## Submission
-
-Target track: **Unstoppable DeFi** (NEAR HACKATHON). The same build also fits
-**AI Security & Defense** because the scoped key and policy engine are the core mechanism.
+* **Project Name**: VaultPilot
+* **Track**: Unstoppable DeFi (NEAR HACKATHON)
+* **Bounty ID**: `652d6afc-2999-4c0f-9d18-39c1f4b6bb85` (Unstoppable DeFi — 1st Place)
+* **Live Demo URL**: [https://aarya2728.github.io/Vault/](https://aarya2728.github.io/Vault/)
+* **Repository**: [https://github.com/aarya2728/Vault](https://github.com/aarya2728/Vault)
+* **License**: MIT
