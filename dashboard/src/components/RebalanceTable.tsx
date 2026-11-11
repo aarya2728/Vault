@@ -150,31 +150,31 @@ export function RebalanceTable({ records }: { records: RebalanceRecord[] }) {
       <div className="history-metrics-grid">
         <div className="history-metric-card">
           <span className="stat-label">Total Volume Rebalanced</span>
-          <strong className="text-xl text-white">
+          <strong className="text-xl">
             {formatAmount(totalOut)} {config.tokenSymbol}
           </strong>
-          <span className="text-xs text-gray-400">across {deploymentsCount} outbound intent(s)</span>
+          <span className="text-xs text-muted">across {deploymentsCount} outbound intent(s)</span>
         </div>
         <div className="history-metric-card">
           <span className="stat-label">Settled Yield Cycles</span>
-          <strong className="text-xl text-emerald-400">
+          <strong className="text-xl text-emerald-600 dark:text-emerald-400">
             {settlementsCount} Completed
           </strong>
-          <span className="text-xs text-gray-400">Round-trip principal + yield</span>
+          <span className="text-xs text-muted">Round-trip principal + yield</span>
         </div>
         <div className="history-metric-card">
           <span className="stat-label">Solver Execution Integrity</span>
-          <strong className="text-xl text-cyan-400">
+          <strong className="text-xl text-sky-600 dark:text-sky-400">
             100% Policy Bound
           </strong>
-          <span className="text-xs text-gray-400">Zero unverified slippage</span>
+          <span className="text-xs text-muted">Zero unverified slippage</span>
         </div>
         <div className="history-metric-card">
           <span className="stat-label">Total Recorded Moves</span>
-          <strong className="text-xl text-purple-300">
+          <strong className="text-xl">
             {records.length} Transactions
           </strong>
-          <span className="text-xs text-gray-400">Immutable contract history</span>
+          <span className="text-xs text-muted">Immutable contract history</span>
         </div>
       </div>
 

@@ -94,7 +94,7 @@ export function VaultYieldCalculator({ summary }: VaultYieldCalculatorProps) {
             <strong className="strategy-title">{strat.name}</strong>
             <div className="strategy-metrics">
               <span>Target: <strong>{formatBps(strat.targetApyBps)} APY</strong></span>
-              <span className="text-emerald-400">+{formatBps(strat.targetApyBps - strat.baseApyBps)} spread</span>
+              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">+{formatBps(strat.targetApyBps - strat.baseApyBps)} spread</span>
             </div>
           </button>
         ))}
@@ -155,7 +155,7 @@ export function VaultYieldCalculator({ summary }: VaultYieldCalculatorProps) {
             </div>
             <div className="health-item">
               <span className="stat-label">Vault Reserve Idle</span>
-              <span className="font-mono text-cyan-400">{formatUsd(summary.idle_assets)}</span>
+              <span className="font-mono">{formatUsd(summary.idle_assets)}</span>
             </div>
           </div>
         </div>
@@ -164,16 +164,16 @@ export function VaultYieldCalculator({ summary }: VaultYieldCalculatorProps) {
         <div className="projection-card">
           <div className="projection-header">
             <span>Projected Returns over {days} Days</span>
-            <span className="text-xs uppercase font-mono text-purple-300">Autonomous Rebalancing</span>
+            <span className="text-xs uppercase font-mono text-muted">Autonomous Rebalancing</span>
           </div>
 
           <div className="projection-comparison">
             <div className="projection-metric">
               <span className="stat-label">VaultPilot Projected Yield</span>
-              <strong className="text-2xl text-emerald-400">
+              <strong className="text-2xl text-emerald-600 dark:text-emerald-400">
                 +${vaultEarnings.toFixed(2)}
               </strong>
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-muted">
                 at {formatBps(selectedStrategy.targetApyBps)} Strategy APY
               </span>
             </div>
@@ -182,10 +182,10 @@ export function VaultYieldCalculator({ summary }: VaultYieldCalculatorProps) {
 
             <div className="projection-metric">
               <span className="stat-label">Standard NEAR Native Yield</span>
-              <strong className="text-lg text-gray-300">
+              <strong className="text-lg">
                 +${baseEarnings.toFixed(2)}
               </strong>
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-muted">
                 at {formatBps(selectedStrategy.baseApyBps)} Base APY
               </span>
             </div>
@@ -193,10 +193,10 @@ export function VaultYieldCalculator({ summary }: VaultYieldCalculatorProps) {
 
           <div className="alpha-badge-box">
             <div className="alpha-text">
-              <span className="text-xs font-semibold text-cyan-400 uppercase tracking-wider">
+              <span className="alpha-label">
                 Intent Alpha Generated
               </span>
-              <p className="text-sm font-bold text-white mt-0.5">
+              <p className="text-sm font-bold mt-0.5">
                 +${netAlpha.toFixed(2)} extra profit (+{formatBps(spreadBps)} spread)
               </p>
             </div>
@@ -205,7 +205,7 @@ export function VaultYieldCalculator({ summary }: VaultYieldCalculatorProps) {
             </span>
           </div>
 
-          <p className="text-xs text-gray-400 mt-4 leading-relaxed">
+          <p className="text-xs text-muted mt-4 leading-relaxed">
             * Yield is captured autonomously via 1Click solvers and credited to the vault contract on-chain. NAV appreciates directly into user share value upon rebalance settlement.
           </p>
         </div>

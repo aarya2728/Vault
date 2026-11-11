@@ -216,13 +216,13 @@ export function ActiveMoveCard({
       {/* Cross-Chain Route Diagram */}
       <div className="cross-chain-route-diagram">
         <div className="route-node">
-          <div className="node-icon bg-purple-500/20 text-purple-300 border border-purple-500/40">
+          <div className="node-icon node-icon-near">
             NEAR
           </div>
           <div className="node-info">
             <strong>Origin Chain</strong>
             <span>VaultPilot Vault</span>
-            <code className="text-[10px] text-gray-400">USDC (nep141)</code>
+            <code className="text-xs text-muted">USDC (nep141)</code>
           </div>
         </div>
 
@@ -231,17 +231,17 @@ export function ActiveMoveCard({
           <div className="flow-line">
             <span className="flow-dot" />
           </div>
-          <span className="text-[10px] text-cyan-400 font-mono">Zero Bridge Risk &bull; Intent Auction</span>
+          <span className="text-xs text-muted font-mono">Zero Bridge Risk &bull; Intent Auction</span>
         </div>
 
         <div className="route-node">
-          <div className="node-icon bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+          <div className="node-icon node-icon-dest">
             ARB
           </div>
           <div className="node-info">
             <strong>Destination Venue</strong>
             <span>Arbitrum One</span>
-            <code className="text-[10px] text-gray-400">USDC (Native ERC-20)</code>
+            <code className="text-xs text-muted">USDC (Native ERC-20)</code>
           </div>
         </div>
       </div>

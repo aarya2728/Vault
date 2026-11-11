@@ -283,7 +283,7 @@ export function QuoteSimulator({ summary }: { summary: VaultSummary }) {
               </div>
               <div>
                 <span className="stat-label">Calculated Net Spread</span>
-                <strong className={netSpreadBps >= minSpreadBps ? "text-emerald-400 font-mono" : "text-amber-400 font-mono"}>
+                <strong className={netSpreadBps >= minSpreadBps ? "text-emerald-600 dark:text-emerald-400 font-mono" : "text-amber-600 dark:text-amber-400 font-mono"}>
                   {netSpreadBps} bps ({netSpreadBps >= minSpreadBps ? "Spread Cleared" : "Too Low"})
                 </strong>
               </div>

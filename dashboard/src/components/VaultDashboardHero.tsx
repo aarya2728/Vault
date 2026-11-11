@@ -1,5 +1,5 @@
-import { motion } from "framer-motion";
 import { useNear } from "../providers/NearProvider.js";
+import { useTheme } from "../providers/ThemeProvider.js";
 import { config, shorten, type VaultSummary } from "../lib/vault.js";
 
 interface VaultDashboardHeroProps {
@@ -9,6 +9,7 @@ interface VaultDashboardHeroProps {
 
 export function VaultDashboardHero({ summary, onGetStarted }: VaultDashboardHeroProps) {
   const { accountId, connecting, connect, disconnect } = useNear();
+  const { theme, toggleTheme } = useTheme();
 
   const handleScroll = (id: string) => {
     const el = document.getElementById(id);
@@ -21,244 +22,190 @@ export function VaultDashboardHero({ summary, onGetStarted }: VaultDashboardHero
     if (onGetStarted) {
       onGetStarted();
     } else {
-      handleScroll("vault-dashboard");
+      handleScroll("user-position-section");
     }
   };
 
-  const hasPendingMove = summary?.pending_move !== null && summary?.pending_move !== undefined;
   const isAgentActive = summary?.agent_enabled && !summary?.paused;
+  const hasPendingMove = summary?.pending_move !== null && summary?.pending_move !== undefined;
 
   return (
-    <section className="relative min-h-[90vh] bg-[#0A0B0E] text-white flex flex-col justify-between overflow-hidden px-6 md:px-16 py-8 rounded-2xl border border-white/5 mb-8 shadow-2xl">
-      {/* Background Neon Glowing Gradients */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-purple-600/15 rounded-full blur-[140px] pointer-events-none" />
-      <div className="absolute top-1/3 right-10 w-[350px] h-[350px] bg-cyan-500/12 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-10 left-10 w-[300px] h-[300px] bg-indigo-600/10 rounded-full blur-[100px] pointer-events-none" />
-
-      {/* Top Navbar */}
-      <header className="flex items-center justify-between z-10 w-full pb-6 border-b border-white/5">
-        <div className="flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-cyan-400 flex items-center justify-center font-bold text-lg shadow-lg shadow-purple-500/30 text-white">
-            VP
-          </div>
-          <div className="flex flex-col">
-            <span className="text-xl font-bold tracking-tight bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">
-              VaultPilot
-            </span>
-            <span className="text-[10px] text-cyan-400 font-mono tracking-wider uppercase">
-              NEAR Intents Autonomous Vault
-            </span>
+    <div className="hero-container">
+      {/* Top Navigation Bar */}
+      <nav className="hero-nav">
+        <div className="hero-brand">
+          <div className="brand-logo">VP</div>
+          <div className="brand-text">
+            <span className="brand-name">VaultPilot</span>
+            <span className="brand-tag">NEAR Intents Yield Vault</span>
           </div>
         </div>
 
-        <nav className="hidden md:flex items-center space-x-8 text-sm text-gray-400 font-medium">
-          <button
-            onClick={() => handleScroll("vault-dashboard")}
-            className="hover:text-white transition-colors cursor-pointer bg-transparent border-0 p-0"
-          >
-            Vaults
+        <div className="hero-links">
+          <button type="button" onClick={() => handleScroll("vault-stats-section")}>
+            Overview
           </button>
-          <button
-            onClick={() => handleScroll("intent-tracker")}
-            className="hover:text-white transition-colors cursor-pointer bg-transparent border-0 p-0"
-          >
-            Intents
+          <button type="button" onClick={() => handleScroll("yield-engine-section")}>
+            Yield Engine
           </button>
-          <button
-            onClick={() => handleScroll("quote-simulator")}
-            className="hover:text-white transition-colors cursor-pointer bg-transparent border-0 p-0"
-          >
+          <button type="button" onClick={() => handleScroll("intent-tracker")}>
+            Intent Route
+          </button>
+          <button type="button" onClick={() => handleScroll("quote-simulator")}>
             Simulator
           </button>
-          <button
-            onClick={() => handleScroll("rebalance-history")}
-            className="hover:text-white transition-colors cursor-pointer bg-transparent border-0 p-0"
-          >
-            History
+          <button type="button" onClick={() => handleScroll("rebalance-history")}>
+            Audit Ledger
           </button>
-        </nav>
+        </div>
 
-        <div className="flex items-center space-x-3">
-          <span className="hidden sm:inline-flex px-2.5 py-1 rounded-full text-xs font-mono bg-white/5 border border-white/10 text-gray-300">
-            {config.network}
-          </span>
+        <div className="hero-actions">
+          {/* Theme Switcher */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="theme-toggle-btn"
+            title={`Switch to ${theme === "light" ? "Dark" : "Light"} theme`}
+            aria-label="Toggle color theme"
+          >
+            {theme === "light" ? (
+              <svg className="theme-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
+                />
+              </svg>
+            ) : (
+              <svg className="theme-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M12 3v1m0 16v1m9-9h-1M4 9h-1m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
+                />
+              </svg>
+            )}
+            <span className="theme-label">{theme === "light" ? "Dark" : "Light"}</span>
+          </button>
+
+          {/* Network Chip */}
+          <span className="network-pill">{config.network}</span>
+
+          {/* Wallet Button */}
           {accountId ? (
-            <div className="flex items-center space-x-2">
-              <span className="px-3 py-1.5 rounded-xl bg-white/5 border border-purple-400/30 text-xs font-mono text-purple-300">
+            <div className="account-pill-group">
+              <span className="account-address" title={accountId}>
                 {shorten(accountId, 10, 6)}
               </span>
               <button
+                type="button"
                 onClick={() => void disconnect().catch(() => undefined)}
-                className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-gray-400 hover:text-white transition-all border border-white/10 cursor-pointer"
+                className="disconnect-btn"
               >
                 Disconnect
               </button>
             </div>
           ) : (
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
+            <button
+              type="button"
               onClick={() => void connect().catch(() => undefined)}
               disabled={connecting}
-              className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-medium text-sm shadow-lg shadow-purple-600/25 border border-purple-400/20 backdrop-blur-md cursor-pointer"
+              className="connect-wallet-btn"
             >
               {connecting ? "Connecting..." : "Connect Wallet"}
-            </motion.button>
+            </button>
           )}
         </div>
-      </header>
+      </nav>
 
-      {/* Hero Body Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center my-auto z-10 py-10">
-        {/* Left Column: Text & CTA */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-          className="lg:col-span-7 space-y-6"
-        >
-          <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs text-purple-300 backdrop-blur-md">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-            <span className="font-medium">Powered by NEAR Intents &amp; Scoped Function-Call Keys</span>
-          </div>
+      {/* Hero Headline & Intro */}
+      <div className="hero-content">
+        <div className="security-tag-row">
+          <span className="security-tag">
+            <span className="tag-dot" />
+            Bounded Function-Call Keys
+          </span>
+          <span className="security-tag">On-Chain Policy Guardrails</span>
+          <span className="security-tag">ERC-4626 Virtual Shares</span>
+        </div>
 
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.12]">
-            Simplifying DeFi's Most <br />
-            <span className="bg-gradient-to-r from-purple-400 via-indigo-300 to-cyan-400 bg-clip-text text-transparent">
-              Complex Transactions
-            </span>
-          </h1>
+        <h1 className="hero-title">
+          Autonomous Stablecoin Yield, <br />
+          <span className="hero-title-highlight">Driven by NEAR Intents.</span>
+        </h1>
 
-          <p className="text-gray-400 text-base sm:text-lg max-w-xl font-normal leading-relaxed">
-            Execute cross-chain yield strategies effortlessly with intent-powered automated routing,
-            secure bounded keys, and on-chain policy enforcement where markets never close.
-          </p>
+        <p className="hero-desc">
+          Deposit once on NEAR. An automated agent scans cross-chain opportunities via 1Click solvers,
+          routing stablecoins to top-tier venues while locked inside on-chain caps and daily limits.
+        </p>
 
-          <div className="flex flex-wrap items-center gap-4 pt-2">
-            <motion.button
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={handleStart}
-              className="px-7 py-3.5 rounded-xl bg-white text-black font-semibold text-sm shadow-xl hover:bg-gray-100 transition-all flex items-center space-x-2 cursor-pointer"
-            >
-              <span>Get started</span>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
-              </svg>
-            </motion.button>
-
-            <button
-              onClick={() => handleScroll("quote-simulator")}
-              className="px-6 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white font-medium text-sm backdrop-blur-md transition-all cursor-pointer"
-            >
-              Test 1Click Simulator
-            </button>
-          </div>
-
-          {/* Key Trust & Architecture Pillars */}
-          <div className="grid grid-cols-3 gap-4 pt-6 border-t border-white/5 max-w-lg">
-            <div>
-              <p className="text-xs text-gray-500 uppercase font-mono">Key Security</p>
-              <p className="text-sm font-semibold text-white mt-1">Bounded Agent</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase font-mono">Routing</p>
-              <p className="text-sm font-semibold text-cyan-400 mt-1">1Click Intents</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase font-mono">Accounting</p>
-              <p className="text-sm font-semibold text-purple-300 mt-1">ERC-4626 Math</p>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Right Column: 3D Holographic Portal Graphic / Glass Card */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.8, delay: 0.2 }}
-          className="lg:col-span-5 relative flex items-center justify-center"
-        >
-          {/* Glowing ring container */}
-          <div className="relative w-full max-w-[420px] aspect-square rounded-3xl bg-gradient-to-b from-white/10 to-transparent p-[1px] backdrop-blur-2xl shadow-2xl shadow-purple-900/30">
-            <div className="w-full h-full rounded-3xl bg-[#0F1015]/90 p-6 flex flex-col justify-between relative overflow-hidden">
-              {/* Internal ambient lights */}
-              <div className="absolute -top-12 -right-12 w-48 h-48 bg-purple-600/25 rounded-full blur-3xl pointer-events-none" />
-              <div className="absolute -bottom-12 -left-12 w-48 h-48 bg-cyan-600/20 rounded-full blur-3xl pointer-events-none" />
-
-              {/* Top card stats */}
-              <div className="flex justify-between items-center z-10 border-b border-white/10 pb-4">
-                <div>
-                  <p className="text-xs text-gray-400 font-medium">Active Yield Router</p>
-                  <p className="text-sm font-bold text-cyan-400 font-mono">
-                    {hasPendingMove ? "Cross-Chain Move In-Flight" : "1Click Solver Stream"}
-                  </p>
-                </div>
-                <div
-                  className={`px-2.5 py-1 rounded-full text-xs font-medium border ${
-                    hasPendingMove
-                      ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
-                      : isAgentActive
-                      ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-                      : "bg-gray-500/10 border-gray-500/20 text-gray-400"
-                  }`}
-                >
-                  {hasPendingMove ? "Routing" : isAgentActive ? "Active" : "Standby"}
-                </div>
-              </div>
-
-              {/* Center Holographic Graphic Representation */}
-              <div className="my-auto py-6 flex flex-col items-center justify-center relative z-10">
-                <div className="w-36 h-36 rounded-full border border-purple-500/30 flex items-center justify-center relative animate-[spin_20s_linear_infinite]">
-                  <div className="absolute inset-2 rounded-full border border-cyan-400/25 border-dashed animate-[spin_15s_linear_infinite_reverse]" />
-                  <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-purple-600/70 to-cyan-400/70 blur-md absolute" />
-                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-purple-500 to-cyan-300 shadow-xl shadow-cyan-500/40 flex items-center justify-center font-extrabold text-xl text-black z-10">
-                    VP
-                  </div>
-                </div>
-                <p className="text-xs text-gray-400 mt-4 tracking-wider uppercase font-mono">
-                  {hasPendingMove ? "Intent Solver Executing" : "Autonomous Market Watcher"}
-                </p>
-              </div>
-
-              {/* Bottom stats pill */}
-              <div className="z-10 bg-white/5 rounded-2xl p-4 border border-white/10 flex items-center justify-between backdrop-blur-md">
-                <div>
-                  <span className="text-xs text-gray-400">Target External Yield</span>
-                  <p className="text-lg font-bold text-white">
-                    12.0% <span className="text-xs font-normal text-emerald-400">+7.5% spread</span>
-                  </p>
-                </div>
-                <div className="text-right">
-                  <span className="text-xs text-gray-400">Scoped Key</span>
-                  <p className="text-xs font-mono text-purple-300 font-semibold">
-                    {summary?.agent_enabled ? "Enabled" : "Disabled"}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-
-      {/* Footer minimal info */}
-      <footer className="flex flex-col sm:flex-row items-center justify-between text-xs text-gray-500 border-t border-white/5 pt-6 z-10">
-        <p>&copy; 2026 VaultPilot Protocol &bull; Built for NEAR Hackathon</p>
-        <div className="flex space-x-6 mt-3 sm:mt-0 font-medium">
-          <button
-            onClick={() => handleScroll("wiring-section")}
-            className="hover:text-gray-400 cursor-pointer bg-transparent border-0 p-0"
-          >
-            Wiring &amp; Architecture
+        <div className="hero-cta-group">
+          <button type="button" onClick={handleStart} className="btn-primary-cta">
+            Deposit to Vault
+            <svg className="cta-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
           </button>
+
           <button
-            onClick={() => handleScroll("policy-section")}
-            className="hover:text-gray-400 cursor-pointer bg-transparent border-0 p-0"
+            type="button"
+            onClick={() => handleScroll("intent-tracker")}
+            className="btn-secondary-cta"
           >
-            Policy Guardrails
+            Live Intent Telemetry
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleScroll("quote-simulator")}
+            className="btn-secondary-cta"
+          >
+            Simulate Strategy
           </button>
         </div>
-      </footer>
-    </section>
+      </div>
+
+      {/* Key Metrics Row */}
+      <div className="hero-metrics-grid">
+        <div className="metric-box">
+          <span className="metric-label">Target Strategy Yield</span>
+          <div className="metric-main">
+            <span className="metric-number">14.2%</span>
+            <span className="metric-badge-alpha">+9.7% Alpha</span>
+          </div>
+          <span className="metric-sub">vs. 4.5% standard single-chain base</span>
+        </div>
+
+        <div className="metric-box">
+          <span className="metric-label">Active Intent Route</span>
+          <div className="metric-main">
+            <span className="metric-text-val">NEAR ➔ Arbitrum</span>
+          </div>
+          <span className="metric-sub">Priced via 1Click Solvers (USDC)</span>
+        </div>
+
+        <div className="metric-box">
+          <span className="metric-label">Agent Status</span>
+          <div className="metric-main">
+            <span className={`status-pill ${isAgentActive ? "status-active" : "status-paused"}`}>
+              {summary?.paused ? "Vault Paused" : isAgentActive ? "Active & Enforcing" : "Disabled"}
+            </span>
+          </div>
+          <span className="metric-sub">
+            {hasPendingMove ? "Position currently in flight" : "Standing by for profitable spread"}
+          </span>
+        </div>
+
+        <div className="metric-box">
+          <span className="metric-label">Safety &amp; Execution</span>
+          <div className="metric-main">
+            <span className="metric-text-val">Strictly Bounded</span>
+          </div>
+          <span className="metric-sub">Instant withdrawal from idle liquidity</span>
+        </div>
+      </div>
+    </div>
   );
 }

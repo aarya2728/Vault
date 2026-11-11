@@ -147,22 +147,28 @@ export default function App() {
         {summary ? (
           <>
             <OwnerControls summary={summary} onRefreshed={refresh} demo={demoMode} />
-            <VaultStats summary={summary} />
-            <VaultYieldCalculator summary={summary} />
+            <div id="vault-stats-section">
+              <VaultStats summary={summary} />
+            </div>
+            <div id="yield-engine-section">
+              <VaultYieldCalculator summary={summary} />
+            </div>
             <div id="intent-tracker">
               <ActiveMoveCard summary={summary} onRefresh={refresh} demo={demoMode} />
             </div>
             <DecisionStream />
-            {accountId || demoMode ? (
-              <UserPosition summary={summary} onRefreshed={refresh} demo={demoMode} />
-            ) : (
-              <section className="panel wallet-cta">
-                <p className="muted">
-                  Connect a wallet to deposit, withdraw, and view your position. The agent never holds
-                  your keys; only the vault policy moves funds.
-                </p>
-              </section>
-            )}
+            <div id="user-position-section">
+              {accountId || demoMode ? (
+                <UserPosition summary={summary} onRefreshed={refresh} demo={demoMode} />
+              ) : (
+                <section className="panel wallet-cta">
+                  <p className="muted">
+                    Connect a wallet to deposit, withdraw, and view your position. The agent never holds
+                    your keys; only the vault policy moves funds.
+                  </p>
+                </section>
+              )}
+            </div>
             <div className="two-col">
               <div id="policy-section">
                 <PolicyCard policy={summary.policy} />
