@@ -3,7 +3,7 @@ use near_sdk::{near, require};
 
 /// On-chain guardrails for the agent. Amounts are in the vault token's smallest unit.
 #[near(serializers = [json, borsh])]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Policy {
     pub min_move: U128,
     pub max_per_move: U128,
