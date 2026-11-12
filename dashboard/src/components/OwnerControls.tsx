@@ -1,17 +1,31 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNear } from "../providers/NearProvider.js";
 import {
   config,
   formatAmount,
-  formatBps,
-  formatTime,
   parseAmount,
   type Policy,
   type TimelockedPolicyProposal,
   type VaultSummary,
 } from "../lib/vault.js";
+import { AlertTriangleIcon, ClockIcon, LockIcon, ShieldOutlineIcon } from "./Icons.js";
 
 const GAS = "100000000000000";
+
+function formatShortUsdK(raw: string | number | bigint): string {
+  const num = Number(BigInt(raw)) / 10 ** config.tokenDecimals;
+  if (num >= 1000) return `$${Math.round(num / 1000)}k`;
+  return `$${num.toFixed(0)}`;
+}
+
+function formatCountdown(msRemaining: number): string {
+  if (msRemaining <= 0) return "00:00:00";
+  const totalSeconds = Math.floor(msRemaining / 1000);
+  const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
+  const mins = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+  const secs = String(totalSeconds % 60).padStart(2, "0");
+  return `${hours}:${mins}:${secs}`;
+}
 
 export function OwnerControls({
   summary,
@@ -28,34 +42,42 @@ export function OwnerControls({
 
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmReset, setConfirmReset] = useState(false);
-  const [showProposeModal, setShowProposeModal] = useState(false);
+  const [showProposeForm, setShowProposeForm] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
-  // Proposal form state
-  const [propMaxPerMove, setPropMaxPerMove] = useState(
-    formatAmount(summary.policy.max_per_move),
-  );
-  const [propDailyCap, setPropDailyCap] = useState(
-    formatAmount(summary.policy.daily_cap),
-  );
+  const [propMaxPerMove, setPropMaxPerMove] = useState(formatAmount(summary.policy.max_per_move));
+  const [propDailyCap, setPropDailyCap] = useState(formatAmount(summary.policy.daily_cap));
   const [propSlippageBps, setPropSlippageBps] = useState(
     summary.policy.max_slippage_bps.toString(),
   );
 
-  // Demo proposal state
   const [demoProposal, setDemoProposal] = useState<TimelockedPolicyProposal | null | undefined>(
     summary.pending_policy_proposal,
   );
+  const [demoPaused, setDemoPaused] = useState(summary.paused);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const activeProposal = demo ? demoProposal : summary.pending_policy_proposal;
+  const pausedState = demo ? demoPaused : summary.paused;
 
-  if (!isOwner && !demo) {
-    return null; // Only visible to the owner
-  }
+  const msRemaining = activeProposal ? Math.max(0, activeProposal.eta_ms - nowMs) : 0;
+  const isTimelockReady = activeProposal ? msRemaining === 0 : false;
+  const hoursRemaining = Math.max(0, Math.ceil(msRemaining / (1000 * 60 * 60)));
 
   async function handleTogglePause() {
-    if (!canControl) return;
     setError(null);
+    if (demo) {
+      setDemoPaused((p) => !p);
+      return;
+    }
+    if (!canControl) {
+      setError("Connect the vault owner wallet to pause/unpause.");
+      return;
+    }
     setLoading("pause");
     try {
       await callMethod({
@@ -73,41 +95,25 @@ export function OwnerControls({
     }
   }
 
-  async function handleToggleAgent() {
-    if (!canControl) return;
+  async function handleExecutePolicy() {
     setError(null);
-    setLoading("agent");
-    try {
-      await callMethod({
-        contractId: config.vaultContract,
-        methodName: "set_agent_enabled",
-        args: { enabled: !summary.agent_enabled },
-        gas: GAS,
-        deposit: "0",
-      });
-      onRefreshed();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(null);
+    if (demo) {
+      setDemoProposal(null);
+      return;
     }
-  }
-
-  async function handleEmergencyReset() {
-    if (!canControl) return;
-    setError(null);
-    setLoading("reset");
+    if (!canControl) {
+      setError("Connect the vault owner wallet to execute policy.");
+      return;
+    }
+    setLoading("execute");
     try {
       await callMethod({
         contractId: config.vaultContract,
-        methodName: "emergency_reset_position",
-        args: {
-          reason: "Manual owner emergency reset via VaultPilot dashboard",
-        },
+        methodName: "execute_policy",
+        args: {},
         gas: GAS,
         deposit: "0",
       });
-      setConfirmReset(false);
       onRefreshed();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -129,7 +135,7 @@ export function OwnerControls({
       dailyCapParsed = parseAmount(propDailyCap);
       slippageParsed = parseInt(propSlippageBps, 10);
       if (Number.isNaN(slippageParsed) || slippageParsed <= 0 || slippageParsed > 1000) {
-        throw new Error("slippage must be between 1 and 1000 bps (0.01% - 10%)");
+        throw new Error("Slippage must be between 1 and 1000 bps.");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -145,21 +151,21 @@ export function OwnerControls({
     };
 
     if (demo) {
-      setLoading("propose");
-      setTimeout(() => {
-        setDemoProposal({
-          policy: newPolicy,
-          proposed_at_ms: Date.now(),
-          eta_ms: Date.now() + 48 * 3600 * 1000,
-          proposer: "council.roundvest.testnet",
-        });
-        setShowProposeModal(false);
-        setLoading(null);
-      }, 500);
+      setDemoProposal({
+        policy: newPolicy,
+        proposed_at_ms: Date.now(),
+        eta_ms: Date.now() + 48 * 3600 * 1000,
+        proposer: summary.owner,
+      });
+      setShowProposeForm(false);
       return;
     }
 
-    if (!canControl) return;
+    if (!canControl) {
+      setError("Connect the vault owner wallet to propose policy changes.");
+      return;
+    }
+
     setLoading("propose");
     try {
       await callMethod({
@@ -169,7 +175,7 @@ export function OwnerControls({
         gas: GAS,
         deposit: "0",
       });
-      setShowProposeModal(false);
+      setShowProposeForm(false);
       onRefreshed();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -177,321 +183,142 @@ export function OwnerControls({
       setLoading(null);
     }
   }
-
-  async function handleExecutePolicy() {
-    if (demo) {
-      setLoading("execute");
-      setTimeout(() => {
-        setDemoProposal(null);
-        setLoading(null);
-      }, 500);
-      return;
-    }
-
-    if (!canControl) return;
-    setError(null);
-    setLoading("execute");
-    try {
-      await callMethod({
-        contractId: config.vaultContract,
-        methodName: "execute_policy",
-        args: {},
-        gas: GAS,
-        deposit: "0",
-      });
-      onRefreshed();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function handleCancelProposal() {
-    if (demo) {
-      setLoading("cancel_prop");
-      setTimeout(() => {
-        setDemoProposal(null);
-        setLoading(null);
-      }, 500);
-      return;
-    }
-
-    if (!canControl) return;
-    setError(null);
-    setLoading("cancel_prop");
-    try {
-      await callMethod({
-        contractId: config.vaultContract,
-        methodName: "cancel_policy_proposal",
-        args: {},
-        gas: GAS,
-        deposit: "0",
-      });
-      onRefreshed();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  const hasDeployed = BigInt(summary.deployed_assets) > 0n;
-  const now = Date.now();
-  const isTimelockReady = activeProposal ? now >= activeProposal.eta_ms : false;
-  const hoursRemaining = activeProposal
-    ? Math.max(0, Math.ceil((activeProposal.eta_ms - now) / (1000 * 60 * 60)))
-    : 0;
 
   return (
-    <section className="panel owner-panel">
-      <header className="panel-header">
-        <div>
-          <h2>Owner Governance &amp; Timelock Controls</h2>
-          <span className="panel-subtitle">
-            {demo ? "Demo governance view" : "Authenticated as vault owner"}:{" "}
-            <code>{summary.owner}</code>
-          </span>
+    <section className="vp-card">
+      <header className="vp-card-header">
+        <div className="vp-card-title-row">
+          <ShieldOutlineIcon width={16} height={16} style={{ color: "var(--muted)" }} />
+          <span>Governance &amp; Timelock</span>
         </div>
-        <span className={`badge ${demo ? "badge-demo" : "badge-in"}`}>
-          {demo ? "DEMO GOVERNANCE" : "OWNER CONNECTED"}
-        </span>
+        <span className="vp-badge">48h Window</span>
       </header>
 
-      {demo && (
-        <p className="muted small demo-note">
-          Institutional Governance preview. Features 48h timelock delays on policy changes, emergency pause, and position resets.
-        </p>
-      )}
+      {error && <div className="vp-alert-error" style={{ marginBottom: "0.85rem", marginTop: 0 }}>{error}</div>}
 
-      {error && (
-        <div className="alert alert-warn">
-          <strong>Action Failed:</strong> {error}
-        </div>
-      )}
-
-      {/* Timelocked Governance Proposal Sub-panel */}
-      <div className="owner-card" style={{ marginBottom: "1rem", flexDirection: "column", alignItems: "stretch" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <strong>Institutional Timelock Governance (48-Hour Delay)</strong>
-            <p className="muted small" style={{ margin: "0.25rem 0 0 0" }}>
-              To protect depositors from unilateral key compromise or malicious policy edits, all policy changes require a mandatory 48-hour delay before execution.
-            </p>
+      {activeProposal ? (
+        <div className="vp-inset-panel" style={{ marginBottom: "0.9rem" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.55rem" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", fontSize: "0.82rem", fontWeight: 600 }}>
+              <ClockIcon width={14} height={14} style={{ color: "var(--amber-bright)" }} />
+              <span>Pending Parameter Change</span>
+            </span>
+            <span className="mono" style={{ fontSize: "0.74rem", color: isTimelockReady ? "var(--emerald-bright)" : "var(--amber-bright)" }}>
+              {isTimelockReady ? "Timelock elapsed" : `${hoursRemaining}h remaining`}
+            </span>
           </div>
-          {!activeProposal && (
-            <button
-              type="button"
-              className="button button-ghost"
-              onClick={() => setShowProposeModal(!showProposeModal)}
-            >
-              {showProposeModal ? "Cancel Proposal" : "Propose Policy Update"}
-            </button>
-          )}
-        </div>
 
-        {activeProposal && (
-          <div
-            style={{
-              marginTop: "1rem",
-              padding: "1rem",
-              borderRadius: "var(--radius-sm, 6px)",
-              border: "1px solid var(--color-border)",
-              background: "var(--color-bg)",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-              <div>
-                <span className="stat-label">Pending Policy Proposal</span>
-                <span className={`pill ${isTimelockReady ? "pill-ok" : "pill-warn"}`} style={{ marginLeft: "0.5rem" }}>
-                  {isTimelockReady ? "Ready to Execute" : `Timelock Active (${hoursRemaining}h remaining)`}
+          <p style={{ margin: "0 0 0.85rem", fontSize: "0.74rem", color: "var(--muted)", lineHeight: 1.45 }}>
+            Mandatory 48-hour timelock is enforcing community auditability. No unilateral owner re-allocations are technically permissible.
+          </p>
+
+          <div className="vp-split-metrics">
+            <div>
+              <div style={{ fontSize: "0.69rem", color: "var(--muted)" }}>Proposed Max Per Move</div>
+              <div className="mono" style={{ fontSize: "0.84rem", fontWeight: 600, marginTop: "2px" }}>
+                <span style={{ color: "var(--text-secondary)" }}>
+                  {formatShortUsdK(summary.policy.max_per_move)}
+                </span>{" "}
+                <span style={{ color: "var(--muted)" }}>→</span>{" "}
+                <span style={{ color: "var(--emerald-bright)" }}>
+                  {formatShortUsdK(activeProposal.policy.max_per_move)}
                 </span>
               </div>
-              <span className="muted small">Proposed: {formatTime(activeProposal.proposed_at_ms)}</span>
             </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", margin: "0.75rem 0" }}>
-              <div>
-                <span className="stat-label">Proposed Max Per Move</span>
-                <strong>{formatAmount(activeProposal.policy.max_per_move)} {config.tokenSymbol}</strong>
+            <div>
+              <div style={{ fontSize: "0.69rem", color: "var(--muted)" }}>Proposed Daily UTC Cap</div>
+              <div className="mono" style={{ fontSize: "0.84rem", fontWeight: 600, marginTop: "2px" }}>
+                <span style={{ color: "var(--text-secondary)" }}>
+                  {formatShortUsdK(summary.policy.daily_cap)}
+                </span>{" "}
+                <span style={{ color: "var(--muted)" }}>→</span>{" "}
+                <span style={{ color: "var(--emerald-bright)" }}>
+                  {formatShortUsdK(activeProposal.policy.daily_cap)}
+                </span>
               </div>
-              <div>
-                <span className="stat-label">Proposed Daily Cap</span>
-                <strong>{formatAmount(activeProposal.policy.daily_cap)} {config.tokenSymbol}</strong>
-              </div>
-              <div>
-                <span className="stat-label">Proposed Max Slippage</span>
-                <strong>{formatBps(activeProposal.policy.max_slippage_bps)}</strong>
-              </div>
-              <div>
-                <span className="stat-label">Executable After</span>
-                <strong>{formatTime(activeProposal.eta_ms)}</strong>
-              </div>
-            </div>
-
-            <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
-              <button
-                type="button"
-                className="button button-primary"
-                onClick={() => void handleExecutePolicy()}
-                disabled={!isTimelockReady || loading !== null}
-                title={!isTimelockReady ? "Timelock delay has not elapsed yet" : undefined}
-              >
-                {loading === "execute" ? "Executing..." : "Execute Policy Change"}
-              </button>
-              <button
-                type="button"
-                className="button button-warn"
-                onClick={() => void handleCancelProposal()}
-                disabled={loading !== null}
-              >
-                {loading === "cancel_prop" ? "Cancelling..." : "Cancel Proposal"}
-              </button>
             </div>
           </div>
-        )}
-
-        {showProposeModal && !activeProposal && (
-          <form
-            onSubmit={(e) => void handleProposePolicy(e)}
-            style={{
-              marginTop: "1rem",
-              padding: "1rem",
-              borderRadius: "var(--radius-sm, 6px)",
-              border: "1px solid var(--color-border)",
-              background: "var(--color-bg)",
-            }}
-          >
-            <h4 style={{ margin: "0 0 0.5rem 0" }}>Propose New Vault Policy</h4>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem" }}>
-              <div>
-                <label className="stat-label">Max Per Move ({config.tokenSymbol})</label>
-                <input
-                  className="input"
-                  value={propMaxPerMove}
-                  onChange={(e) => setPropMaxPerMove(e.target.value)}
-                  style={{ width: "100%", marginTop: "0.25rem" }}
-                />
-              </div>
-              <div>
-                <label className="stat-label">Daily Cap ({config.tokenSymbol})</label>
-                <input
-                  className="input"
-                  value={propDailyCap}
-                  onChange={(e) => setPropDailyCap(e.target.value)}
-                  style={{ width: "100%", marginTop: "0.25rem" }}
-                />
-              </div>
-              <div>
-                <label className="stat-label">Max Slippage (basis points)</label>
-                <input
-                  className="input"
-                  type="number"
-                  value={propSlippageBps}
-                  onChange={(e) => setPropSlippageBps(e.target.value)}
-                  style={{ width: "100%", marginTop: "0.25rem" }}
-                />
-              </div>
-            </div>
-            <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem" }}>
-              <button type="submit" className="button button-primary" disabled={loading === "propose"}>
-                {loading === "propose" ? "Submitting..." : "Submit 48h Timelock Proposal"}
-              </button>
-              <button type="button" className="button" onClick={() => setShowProposeModal(false)}>
-                Cancel
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
-
-      <div className="owner-actions-grid">
-        <div className="owner-card">
-          <div>
-            <strong>Vault Emergency Pause</strong>
-            <p className="muted small">
-              Pauses all agent rebalance actions immediately. User withdrawals remain active.
-            </p>
-          </div>
-          <button
-            type="button"
-            className={`button ${summary.paused ? "button-primary" : "button-warn"}`}
-            onClick={handleTogglePause}
-            disabled={demo || loading !== null}
-          >
-            {loading === "pause"
-              ? "Updating..."
-              : summary.paused
-              ? "Unpause Vault"
-              : "Pause Vault"}
-          </button>
         </div>
-
-        <div className="owner-card">
-          <div>
-            <strong>Autonomous Agent Permission</strong>
-            <p className="muted small">
-              Enable or disable the agent function-call key from triggering moves.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="button"
-            onClick={handleToggleAgent}
-            disabled={demo || loading !== null}
-          >
-            {loading === "agent"
-              ? "Updating..."
-              : summary.agent_enabled
-              ? "Disable Agent"
-              : "Enable Agent"}
-          </button>
-        </div>
-
-        <div className="owner-card">
-          <div>
-            <strong>Emergency Position Reset</strong>
-            <p className="muted small">
-              Clears stuck deployed position if an external solver or callback hangs.
-            </p>
-          </div>
-          {confirmReset ? (
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
-                type="button"
-                className="button button-warn"
-                onClick={handleEmergencyReset}
-                disabled={demo || loading !== null}
-              >
-                {loading === "reset" ? "Resetting..." : "Confirm Reset"}
-              </button>
-              <button
-                type="button"
-                className="button"
-                onClick={() => setConfirmReset(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
+      ) : (
+        <div className="vp-inset-panel" style={{ marginBottom: "0.9rem" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
+            <span style={{ fontSize: "0.82rem", fontWeight: 600 }}>Timelock Armed</span>
             <button
               type="button"
-              className="button button-warn"
-              onClick={() => setConfirmReset(true)}
-              disabled={demo || loading !== null || !hasDeployed}
-              title={
-                demo
-                  ? "Demo governance preview"
-                  : !hasDeployed
-                  ? "No open position to reset"
-                  : undefined
-              }
+              className="vp-icon-btn"
+              onClick={() => setShowProposeForm((s) => !s)}
             >
-              Emergency Reset
+              {showProposeForm ? "Close Form" : "Propose Update"}
             </button>
-          )}
+          </div>
+          <p style={{ margin: 0, fontSize: "0.74rem", color: "var(--muted)" }}>
+            No pending parameter changes. All cap updates enforce a mandatory timelock queue before execution.
+          </p>
         </div>
+      )}
+
+      {showProposeForm && !activeProposal && (
+        <form onSubmit={(e) => void handleProposePolicy(e)} className="vp-inset-panel" style={{ marginBottom: "0.9rem", display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.55rem" }}>
+            <div>
+              <div style={{ fontSize: "0.69rem", color: "var(--muted)", marginBottom: "0.2rem" }}>Max Per Move (USDC)</div>
+              <input className="vp-input" style={{ width: "100%" }} value={propMaxPerMove} onChange={(e) => setPropMaxPerMove(e.target.value)} />
+            </div>
+            <div>
+              <div style={{ fontSize: "0.69rem", color: "var(--muted)", marginBottom: "0.2rem" }}>Daily Cap (USDC)</div>
+              <input className="vp-input" style={{ width: "100%" }} value={propDailyCap} onChange={(e) => setPropDailyCap(e.target.value)} />
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: "0.69rem", color: "var(--muted)", marginBottom: "0.2rem" }}>Max Slippage (bps)</div>
+            <input className="vp-input" style={{ width: "100%" }} type="number" value={propSlippageBps} onChange={(e) => setPropSlippageBps(e.target.value)} />
+          </div>
+          <button type="submit" className="vp-cta-white" disabled={loading === "propose"}>
+            {loading === "propose" ? "Submitting..." : "Submit Timelocked Proposal"}
+          </button>
+        </form>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+        {activeProposal && (
+          <button
+            type="button"
+            className="vp-btn-muted"
+            onClick={() => void handleExecutePolicy()}
+            disabled={!isTimelockReady || loading !== null}
+            title={!isTimelockReady ? "Timelock delay has not elapsed yet" : "Execute policy change"}
+          >
+            <LockIcon width={13} height={13} />
+            <span>
+              {loading === "execute"
+                ? "Executing Policy..."
+                : isTimelockReady
+                ? "Execute Policy Change (Unlocked)"
+                : `Execute Policy Change (Locked - ${formatCountdown(msRemaining)})`}
+            </span>
+          </button>
+        )}
+
+        <button
+          type="button"
+          className="vp-btn-danger"
+          onClick={() => void handleTogglePause()}
+          disabled={loading !== null}
+        >
+          <AlertTriangleIcon width={14} height={14} />
+          <span>
+            {loading === "pause"
+              ? "Updating..."
+              : pausedState
+              ? "Resume Vault Operations"
+              : "Emergency Vault Pause"}
+          </span>
+        </button>
       </div>
+
+      <p className="mono" style={{ fontSize: "0.68rem", color: "var(--muted)", textAlign: "center", margin: "0.85rem 0 0" }}>
+        Multi-sig owner quorum: 3 of 4 verified signatures required.
+      </p>
     </section>
   );
 }

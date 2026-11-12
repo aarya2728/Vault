@@ -1,12 +1,13 @@
 import { useState } from "react";
 import type { RebalanceRecord } from "../lib/vault.js";
 import {
-  formatAmount,
+  formatPrettyAmount,
   formatTime,
   shorten,
   NEAR_INTENTS_EXPLORER_TX,
   config,
 } from "../lib/vault.js";
+import { DownloadIcon, SwapVerticalIcon } from "./Icons.js";
 
 function renderReason(reason: string) {
   if (!reason) return "-";
@@ -22,7 +23,7 @@ function renderReason(reason: string) {
               {hashes.map((h, hashIndex) => (
                 <span key={h}>
                   {hashIndex > 0 ? "," : ""}
-                  <code className="intent-hash-inline" title={h}>
+                  <code style={{ color: "var(--emerald-bright)" }} title={h}>
                     {shorten(h, 6, 4)}
                   </code>
                 </span>
@@ -38,7 +39,7 @@ function renderReason(reason: string) {
               href={`${NEAR_INTENTS_EXPLORER_TX}/${hash}`}
               target="_blank"
               rel="noreferrer"
-              className="intent-link-inline"
+              style={{ color: "var(--sky)", textDecoration: "none", marginLeft: "4px" }}
               title={`View NEAR Intents transaction ${hash}`}
             >
               [tx:{shorten(hash, 6, 4)} ↗]
@@ -52,50 +53,45 @@ function renderReason(reason: string) {
 }
 
 export function RebalanceTable({ records }: { records: RebalanceRecord[] }) {
-  const [filter, setFilter] = useState<"all" | "in" | "out">("all");
-  const [search, setSearch] = useState("");
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [filterKind, setFilterKind] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState<string>("");
 
-  const allRows = [...records].reverse();
-
-  // Calculate history metrics
   const totalOut = records
     .filter((r) => r.kind === "rebalance_out")
     .reduce((acc, r) => acc + BigInt(r.amount), 0n);
+
   const settlementsCount = records.filter((r) => r.kind === "rebalance_in").length;
   const deploymentsCount = records.filter((r) => r.kind === "rebalance_out").length;
 
-  // Filter & Search
-  const filteredRows = allRows.filter((r) => {
-    if (filter === "in" && r.kind !== "rebalance_in") return false;
-    if (filter === "out" && r.kind !== "rebalance_out") return false;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      const matchReason = r.reason?.toLowerCase().includes(q);
-      const matchAddr = r.deposit_address?.toLowerCase().includes(q);
-      const matchKind = r.kind?.toLowerCase().includes(q);
-      const matchAsset = r.destination_asset?.toLowerCase().includes(q);
-      if (!matchReason && !matchAddr && !matchKind && !matchAsset) return false;
+  const filtered = [...records].reverse().filter((r) => {
+    if (filterKind !== "all" && r.kind !== filterKind) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      return (
+        r.reason.toLowerCase().includes(q) ||
+        r.destination_asset.toLowerCase().includes(q) ||
+        (r.deposit_address?.toLowerCase().includes(q) ?? false) ||
+        r.executor.toLowerCase().includes(q)
+      );
     }
     return true;
   });
 
-  // Export functions
   function exportJson() {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(records, null, 2));
-    const downloadAnchor = document.createElement("a");
-    downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `vaultpilot-rebalances-${Date.now()}.json`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
+    const a = document.createElement("a");
+    a.setAttribute("href", dataStr);
+    a.setAttribute("download", `vaultpilot-rebalances-${Date.now()}.json`);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   function exportCsv() {
     const headers = ["id", "timestamp_ms", "kind", "amount", "min_out", "deposit_address", "destination_asset", "executor", "reason"];
     const csvRows = [headers.join(",")];
     for (const r of records) {
-      const row = [
+      csvRows.push([
         r.id,
         r.timestamp_ms,
         r.kind,
@@ -105,236 +101,152 @@ export function RebalanceTable({ records }: { records: RebalanceRecord[] }) {
         `"${r.destination_asset || ""}"`,
         `"${r.executor || ""}"`,
         `"${(r.reason || "").replace(/"/g, '""')}"`,
-      ];
-      csvRows.push(row.join(","));
+      ].join(","));
     }
     const dataStr = "data:text/csv;charset=utf-8," + encodeURIComponent(csvRows.join("\n"));
-    const downloadAnchor = document.createElement("a");
-    downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `vaultpilot-rebalances-${Date.now()}.csv`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
+    const a = document.createElement("a");
+    a.setAttribute("href", dataStr);
+    a.setAttribute("download", `vaultpilot-rebalances-${Date.now()}.csv`);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   return (
-    <section className="panel history-panel">
-      <header className="panel-header">
-        <div>
-          <h2>Autonomous Rebalance Ledger</h2>
-          <span className="panel-subtitle">
-            Cryptographically verifiable on-chain rebalances and 1Click solver fills
-          </span>
+    <section className="vp-card">
+      <header className="vp-card-header">
+        <div className="vp-card-title-row">
+          <SwapVerticalIcon width={16} height={16} style={{ color: "var(--emerald-bright)" }} />
+          <span>Autonomous Rebalance Ledger</span>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="button button-ghost button-sm"
-            onClick={exportCsv}
-            title="Export audit log as CSV"
-          >
-            Export CSV
+        <div style={{ display: "flex", gap: "0.45rem" }}>
+          <button type="button" className="vp-icon-btn" onClick={exportCsv}>
+            <DownloadIcon width={12} height={12} />
+            <span>Export CSV</span>
           </button>
-          <button
-            type="button"
-            className="button button-ghost button-sm"
-            onClick={exportJson}
-            title="Export raw JSON"
-          >
-            Export JSON
+          <button type="button" className="vp-icon-btn" onClick={exportJson}>
+            <DownloadIcon width={12} height={12} />
+            <span>Export JSON</span>
           </button>
         </div>
       </header>
 
-      {/* Metrics Bar */}
-      <div className="history-metrics-grid">
-        <div className="history-metric-card">
-          <span className="stat-label">Total Volume Rebalanced</span>
-          <strong className="text-xl">
-            {formatAmount(totalOut)} {config.tokenSymbol}
-          </strong>
-          <span className="text-xs text-muted">across {deploymentsCount} outbound intent(s)</span>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+        <div className="vp-metric-box">
+          <div style={{ fontSize: "0.68rem", color: "var(--muted)" }}>Total Volume Rebalanced</div>
+          <div className="mono" style={{ fontSize: "0.96rem", fontWeight: 600, marginTop: "3px" }}>
+            {formatPrettyAmount(totalOut)} {config.tokenSymbol}
+          </div>
+          <div className="mono" style={{ fontSize: "0.66rem", color: "var(--muted)" }}>
+            {deploymentsCount} outbound intent(s)
+          </div>
         </div>
-        <div className="history-metric-card">
-          <span className="stat-label">Settled Yield Cycles</span>
-          <strong className="text-xl text-emerald-600 dark:text-emerald-400">
+        <div className="vp-metric-box">
+          <div style={{ fontSize: "0.68rem", color: "var(--muted)" }}>Settled Yield Cycles</div>
+          <div className="mono" style={{ fontSize: "0.96rem", fontWeight: 600, color: "var(--emerald-bright)", marginTop: "3px" }}>
             {settlementsCount} Completed
-          </strong>
-          <span className="text-xs text-muted">Round-trip principal + yield</span>
+          </div>
+          <div className="mono" style={{ fontSize: "0.66rem", color: "var(--muted)" }}>
+            Principal + accrued yield
+          </div>
         </div>
-        <div className="history-metric-card">
-          <span className="stat-label">Solver Execution Integrity</span>
-          <strong className="text-xl text-sky-600 dark:text-sky-400">
+        <div className="vp-metric-box">
+          <div style={{ fontSize: "0.68rem", color: "var(--muted)" }}>Execution Integrity</div>
+          <div className="mono" style={{ fontSize: "0.96rem", fontWeight: 600, color: "var(--sky)", marginTop: "3px" }}>
             100% Policy Bound
-          </strong>
-          <span className="text-xs text-muted">Zero unverified slippage</span>
+          </div>
+          <div className="mono" style={{ fontSize: "0.66rem", color: "var(--muted)" }}>
+            On-chain guardrail verified
+          </div>
         </div>
-        <div className="history-metric-card">
-          <span className="stat-label">Total Recorded Moves</span>
-          <strong className="text-xl">
+        <div className="vp-metric-box">
+          <div style={{ fontSize: "0.68rem", color: "var(--muted)" }}>Total Recorded Moves</div>
+          <div className="mono" style={{ fontSize: "0.96rem", fontWeight: 600, marginTop: "3px" }}>
             {records.length} Transactions
-          </strong>
-          <span className="text-xs text-muted">Immutable contract history</span>
+          </div>
+          <div className="mono" style={{ fontSize: "0.66rem", color: "var(--muted)" }}>
+            Immutable contract log
+          </div>
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
-      <div className="history-controls-row">
-        <div className="filter-pill-group">
-          <button
-            type="button"
-            className={`filter-pill ${filter === "all" ? "filter-pill-active" : ""}`}
-            onClick={() => setFilter("all")}
-          >
-            All Moves ({records.length})
-          </button>
-          <button
-            type="button"
-            className={`filter-pill ${filter === "out" ? "filter-pill-active" : ""}`}
-            onClick={() => setFilter("out")}
-          >
-            Deployments OUT ({deploymentsCount})
-          </button>
-          <button
-            type="button"
-            className={`filter-pill ${filter === "in" ? "filter-pill-active" : ""}`}
-            onClick={() => setFilter("in")}
-          >
-            Settlements IN ({settlementsCount})
-          </button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", marginBottom: "0.85rem", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: "0.4rem" }}>
+          {[
+            { key: "all", label: "All" },
+            { key: "rebalance_out", label: "Deployments" },
+            { key: "rebalance_in", label: "Settlements" },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              className={`vp-pill-btn ${filterKind === tab.key ? "is-active" : ""}`}
+              onClick={() => setFilterKind(tab.key)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
-
-        <div className="history-search-box">
-          <input
-            type="text"
-            placeholder="Search by hash, deposit address, reason..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="input text-xs"
-          />
-        </div>
+        <input
+          type="text"
+          className="vp-input"
+          placeholder="Search intent hash, executor, asset..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          style={{ minWidth: "240px" }}
+        />
       </div>
 
-      {filteredRows.length === 0 ? (
-        <p className="empty">No matching rebalances found.</p>
+      {filtered.length === 0 ? (
+        <p style={{ fontSize: "0.78rem", color: "var(--muted)" }}>No rebalance records match this filter.</p>
       ) : (
-        <div className="table-wrap">
-          <table>
+        <div style={{ overflowX: "auto" }}>
+          <table className="vp-table">
             <thead>
               <tr>
-                <th>#</th>
-                <th>Time</th>
-                <th>Action</th>
-                <th>Amount</th>
-                <th>Min out</th>
-                <th>Deposit address</th>
-                <th>Reason</th>
-                <th>Audit</th>
+                <th className="mono">#</th>
+                <th className="mono">TYPE</th>
+                <th className="mono">AMOUNT</th>
+                <th className="mono">DESTINATION</th>
+                <th className="mono">REASON / TELEMETRY</th>
+                <th className="mono">EXECUTOR</th>
+                <th className="mono">TIMESTAMP</th>
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((record) => {
-                const isExpanded = expandedId === record.id;
-                return (
-                  <tr
-                    key={record.id}
-                    className={`cursor-pointer hover:bg-white/[0.02] ${
-                      isExpanded ? "bg-white/[0.04]" : ""
-                    }`}
-                    onClick={() => setExpandedId(isExpanded ? null : record.id)}
-                  >
-                    <td className="mono font-bold text-gray-400">#{record.id}</td>
-                    <td>{formatTime(record.timestamp_ms)}</td>
-                    <td>
-                      <span className={`badge ${record.kind === "rebalance_in" ? "badge-in" : "badge-out"}`}>
-                        {record.kind === "rebalance_in" ? "IN (SETTLE)" : "OUT (INTENT)"}
-                      </span>
-                    </td>
-                    <td className="mono font-semibold">{formatAmount(record.amount)}</td>
-                    <td className="mono text-gray-400">
-                      {record.kind === "rebalance_in" ? "-" : formatAmount(record.min_out)}
-                    </td>
-                    <td className="mono" title={record.deposit_address ?? undefined}>
-                      {record.deposit_address ? shorten(record.deposit_address, 10, 6) : "-"}
-                    </td>
-                    <td className="reason" title={record.reason}>
-                      {renderReason(record.reason)}
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="button button-ghost button-sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setExpandedId(isExpanded ? null : record.id);
-                        }}
-                      >
-                        {isExpanded ? "Close" : "Inspect"}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {filtered.map((r) => (
+                <tr key={r.id}>
+                  <td className="mono" style={{ color: "var(--muted)" }}>#{r.id}</td>
+                  <td>
+                    <span className={`vp-badge ${r.kind === "rebalance_in" ? "vp-badge-emerald" : "vp-badge-sky"}`}>
+                      {r.kind}
+                    </span>
+                  </td>
+                  <td className="mono" style={{ fontWeight: 600 }}>
+                    {formatPrettyAmount(r.amount)} {config.tokenSymbol}
+                  </td>
+                  <td>
+                    <code style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+                      {shorten(r.destination_asset, 14, 8)}
+                    </code>
+                  </td>
+                  <td style={{ fontSize: "0.74rem", color: "var(--text-secondary)", maxWidth: "360px" }}>
+                    {renderReason(r.reason)}
+                  </td>
+                  <td>
+                    <code style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
+                      {shorten(r.executor, 12, 6)}
+                    </code>
+                  </td>
+                  <td className="mono" style={{ fontSize: "0.72rem", color: "var(--muted)", whiteSpace: "nowrap" }}>
+                    {formatTime(r.timestamp_ms)}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       )}
-
-      {/* Expanded Row Inspector Modal / Box */}
-      {expandedId !== null && (() => {
-        const selected = records.find((r) => r.id === expandedId);
-        if (!selected) return null;
-        return (
-          <div className="history-inspection-drawer">
-            <div className="drawer-header">
-              <span className="text-xs font-mono uppercase text-cyan-400">
-                Transaction #{selected.id} Deep Audit Inspector
-              </span>
-              <button
-                type="button"
-                className="button button-ghost button-sm"
-                onClick={() => setExpandedId(null)}
-              >
-                &times; Close
-              </button>
-            </div>
-            <div className="drawer-grid">
-              <div>
-                <span className="stat-label">Action Kind</span>
-                <strong className={selected.kind === "rebalance_in" ? "text-emerald-400" : "text-amber-400"}>
-                  {selected.kind}
-                </strong>
-              </div>
-              <div>
-                <span className="stat-label">Amount Transacted</span>
-                <span className="font-mono">{formatAmount(selected.amount)} {config.tokenSymbol}</span>
-              </div>
-              <div>
-                <span className="stat-label">Executor Account</span>
-                <code className="text-xs">{selected.executor}</code>
-              </div>
-              <div>
-                <span className="stat-label">Timestamp</span>
-                <span>{new Date(selected.timestamp_ms).toISOString()}</span>
-              </div>
-            </div>
-            <div className="mt-3">
-              <span className="stat-label">Full Audit Payload Reason</span>
-              <p className="font-mono text-xs text-gray-300 bg-black/40 p-2.5 rounded border border-white/5 break-all mt-1">
-                {selected.reason || "No additional reason provided"}
-              </p>
-            </div>
-            {selected.deposit_address && (
-              <div className="mt-2">
-                <span className="stat-label">1Click Deposit Address</span>
-                <code className="text-xs text-cyan-300 block bg-black/40 p-2 rounded border border-white/5 mt-1">
-                  {selected.deposit_address}
-                </code>
-              </div>
-            )}
-          </div>
-        );
-      })()}
     </section>
   );
 }

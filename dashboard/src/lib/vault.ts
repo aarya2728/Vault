@@ -28,6 +28,18 @@ export interface Position {
   min_out: Amount;
   opened_at_ms: number;
   status: string;
+  chain_badge?: string;
+  expected_apy?: string;
+  collateral_route?: string;
+  realized_24h_yield?: string;
+  health_factor?: string;
+  rewards_accrued?: string;
+  mpc_path?: string;
+  rebalanced_label?: string;
+  intent_hash?: string;
+  settlement_tx?: string;
+  solver_spread?: string;
+  sig_latency?: string;
 }
 
 export interface QueuedWithdrawal {
@@ -314,6 +326,27 @@ export function formatAmount(value: Amount, decimals = config.tokenDecimals): st
 
 export function formatUsd(value: Amount, decimals = config.tokenDecimals): string {
   return `$${formatAmount(value, decimals)}`;
+}
+
+export function formatPrettyAmount(
+  value: Amount,
+  decimals = config.tokenDecimals,
+  fractionDigits = 2,
+): string {
+  const num = Number(BigInt(value)) / 10 ** decimals;
+  if (!Number.isFinite(num)) return formatAmount(value, decimals);
+  return num.toLocaleString("en-US", {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
+}
+
+export function formatPrettyUsd(
+  value: Amount,
+  decimals = config.tokenDecimals,
+  fractionDigits = 2,
+): string {
+  return `$${formatPrettyAmount(value, decimals, fractionDigits)}`;
 }
 
 export function formatSharePrice(value: Amount): string {

@@ -9,6 +9,9 @@ import {
   fetchStorageBalance,
   fetchWithdrawalRequest,
   formatAmount,
+  formatPrettyAmount,
+  formatPrettyUsd,
+  formatSharePrice,
   parseAmount,
   sharesForAssets,
   shorten,
@@ -16,6 +19,7 @@ import {
   type VaultSummary,
 } from "../lib/vault.js";
 import { DEMO_QUEUED_WITHDRAWAL } from "../lib/demo.js";
+import { ArrowRightIcon, HourglassIcon, InfoIcon, WalletIcon } from "./Icons.js";
 
 const GAS = "100000000000000";
 const STORAGE_GAS = "30000000000000";
@@ -39,16 +43,15 @@ export function UserPosition({
   demo?: boolean;
 }) {
   const { accountId, callMethod } = useNear();
+  const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
   const [tokenBalance, setTokenBalance] = useState<bigint | null>(null);
   const [shares, setShares] = useState<bigint | null>(null);
   const [queuedWithdrawal, setQueuedWithdrawal] = useState<QueuedWithdrawal | null>(null);
-  const [loading, setLoading] = useState(false);
   const [pending, setPending] = useState<"deposit" | "withdraw" | "queue" | "claim" | "cancel" | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [txError, setTxError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
-  const [depositInput, setDepositInput] = useState("");
-  const [withdrawInput, setWithdrawInput] = useState("");
+  const [amountInput, setAmountInput] = useState("5000");
 
   const load = useCallback(async () => {
     if (demo) {
@@ -56,11 +59,9 @@ export function UserPosition({
       setShares(75_000_000_000n);
       setQueuedWithdrawal(DEMO_QUEUED_WITHDRAWAL);
       setReadError(null);
-      setLoading(false);
       return;
     }
     if (!accountId) return;
-    setLoading(true);
     try {
       const [balanceRaw, sharesRaw, queuedReq] = await Promise.all([
         fetchFtBalance(summary.token, accountId),
@@ -73,8 +74,6 @@ export function UserPosition({
       setReadError(null);
     } catch (cause) {
       setReadError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLoading(false);
     }
   }, [accountId, demo, summary.token]);
 
@@ -84,123 +83,109 @@ export function UserPosition({
 
   const totalAssets = BigInt(summary.total_assets);
   const totalShares = BigInt(summary.total_shares);
-  const positionValue = shares === null ? 0n : assetsForShares(shares, totalAssets, totalShares);
   const idleAssets = BigInt(summary.idle_assets);
   const deployedAssets = BigInt(summary.deployed_assets);
-  const totalCapital = idleAssets + deployedAssets;
-  const idlePct = totalCapital > 0n ? Number((idleAssets * 100n) / totalCapital) : 100;
-  const maxInstant = positionValue < idleAssets ? positionValue : idleAssets;
+  const positionValue = shares === null ? 0n : assetsForShares(shares, totalAssets, totalShares);
+  const poolSharePct =
+    shares !== null && totalShares > 0n
+      ? ((Number(shares) / Number(totalShares)) * 100).toFixed(1)
+      : "0.0";
+  const accruedGain = shares !== null && positionValue > shares ? positionValue - shares : 0n;
   const symbol = config.tokenSymbol;
 
-  let withdrawAssets = 0n;
+  let parsedInput = 0n;
   try {
-    if (withdrawInput.trim() !== "") {
-      withdrawAssets = parseAmount(withdrawInput);
+    if (amountInput.trim() !== "") {
+      parsedInput = parseAmount(amountInput);
     }
   } catch {
-    withdrawAssets = 0n;
+    parsedInput = 0n;
   }
-  const exceedsIdle = withdrawAssets > 0n && withdrawAssets > idleAssets;
 
-  async function handleDeposit(event: FormEvent) {
+  const estimatedSharesOut =
+    mode === "deposit" && parsedInput > 0n
+      ? sharesForAssets(parsedInput, totalAssets, totalShares)
+      : 0n;
+  const withdrawExceedsIdle = mode === "withdraw" && parsedInput > 0n && parsedInput > idleAssets;
+
+  async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setTxError(null);
     setTxHash(null);
 
-    let amount: bigint;
-    try {
-      amount = parseAmount(depositInput);
-    } catch (cause) {
-      setTxError(cause instanceof Error ? cause.message : String(cause));
-      return;
-    }
-
-    if (amount <= 0n) {
-      setTxError("enter an amount greater than zero");
-      return;
-    }
-    if (tokenBalance !== null && amount > tokenBalance) {
-      setTxError(`amount exceeds your ${config.tokenSymbol} balance`);
-      return;
-    }
-    if (!config.vaultContract) {
-      setTxError("VITE_VAULT_CONTRACT is not set");
-      return;
-    }
-
-    setPending("deposit");
-    try {
-      const vaultStorage = await fetchStorageBalance(summary.token, config.vaultContract);
-      if (!vaultStorage) {
-        throw new Error(
-          `The vault is not storage-registered with ${config.tokenSymbol}. Run the storage_deposit command printed by the deploy script, then retry.`,
-        );
+    if (mode === "deposit") {
+      if (demo) {
+        setTxError("Demo mode preview: connect a NEAR wallet & configure VITE_VAULT_CONTRACT to deposit on-chain.");
+        return;
+      }
+      if (parsedInput <= 0n) {
+        setTxError("Enter an amount greater than zero.");
+        return;
+      }
+      if (tokenBalance !== null && parsedInput > tokenBalance) {
+        setTxError(`Amount exceeds your ${symbol} balance.`);
+        return;
+      }
+      if (!config.vaultContract) {
+        setTxError("VITE_VAULT_CONTRACT is not configured.");
+        return;
       }
 
-      const result = await callMethod({
-        contractId: summary.token,
-        methodName: "ft_transfer_call",
-        args: {
-          receiver_id: config.vaultContract,
-          amount: amount.toString(),
-          msg: "",
-        },
-        gas: GAS,
-        deposit: "1",
-      });
-      setTxHash(transactionHash(result));
-      setDepositInput("");
-      await load();
-      onRefreshed();
-    } catch (cause) {
-      setTxError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setPending(null);
-    }
-  }
-
-  async function handleWithdraw(event: FormEvent) {
-    event.preventDefault();
-    setTxError(null);
-    setTxHash(null);
-
-    if (!accountId) {
-      setTxError("connect a wallet first");
+      setPending("deposit");
+      try {
+        const vaultStorage = await fetchStorageBalance(summary.token, config.vaultContract);
+        if (!vaultStorage) {
+          throw new Error(
+            `The vault is not storage-registered with ${symbol}. Run storage_deposit first.`,
+          );
+        }
+        const result = await callMethod({
+          contractId: summary.token,
+          methodName: "ft_transfer_call",
+          args: {
+            receiver_id: config.vaultContract,
+            amount: parsedInput.toString(),
+            msg: "",
+          },
+          gas: GAS,
+          deposit: "1",
+        });
+        setTxHash(transactionHash(result));
+        setAmountInput("");
+        await load();
+        onRefreshed();
+      } catch (cause) {
+        setTxError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        setPending(null);
+      }
       return;
     }
 
-    let assets: bigint;
-    try {
-      assets = parseAmount(withdrawInput);
-    } catch (cause) {
-      setTxError(cause instanceof Error ? cause.message : String(cause));
+    // Withdraw or Queue mode
+    if (withdrawExceedsIdle) {
+      await handleQueueWithdrawal();
       return;
     }
 
-    if (assets <= 0n) {
-      setTxError("enter an amount greater than zero");
+    if (demo) {
+      setTxError("Demo mode preview: connect a NEAR wallet & configure VITE_VAULT_CONTRACT to withdraw on-chain.");
       return;
     }
-    if (shares === null || shares <= 0n) {
-      setTxError("no vault shares to withdraw");
+    if (!accountId || !config.vaultContract) {
+      setTxError("Connect a wallet first.");
       return;
     }
-    if (!config.vaultContract) {
-      setTxError("VITE_VAULT_CONTRACT is not set");
-      return;
-    }
-
-    if (assets > idleAssets) {
-      setTxError(
-        `Withdrawal of ${formatAmount(assets)} ${config.tokenSymbol} exceeds available idle liquidity (${formatAmount(idleAssets)} ${config.tokenSymbol}). Please use "Queue Withdrawal" below to schedule epoch unbonding.`,
-      );
+    if (parsedInput <= 0n || shares === null || shares <= 0n) {
+      setTxError("Enter a valid amount to withdraw.");
       return;
     }
 
-    const requested = assets >= positionValue ? shares : sharesForAssets(assets, totalAssets, totalShares);
+    const requested =
+      parsedInput >= positionValue ? shares : sharesForAssets(parsedInput, totalAssets, totalShares);
     const sharesToBurn = requested > shares ? shares : requested;
     if (sharesToBurn <= 0n) {
-      setTxError("amount is too small to withdraw");
+      setTxError("Amount is too small to withdraw.");
       return;
     }
 
@@ -224,7 +209,7 @@ export function UserPosition({
         deposit: "0",
       });
       setTxHash(transactionHash(result));
-      setWithdrawInput("");
+      setAmountInput("");
       await load();
       onRefreshed();
     } catch (cause) {
@@ -241,46 +226,31 @@ export function UserPosition({
     if (demo) {
       setPending("queue");
       setTimeout(() => {
+        const sharesToQueue =
+          parsedInput > 0n
+            ? sharesForAssets(parsedInput, totalAssets, totalShares)
+            : 12_500_000_000n;
         setQueuedWithdrawal({
           account_id: "demo-user.testnet",
-          shares: "12500000000",
+          shares: sharesToQueue.toString(),
           requested_at_ms: Date.now(),
           epoch: summary.current_epoch ?? 4,
           status: "pending",
           assets_allocated: "0",
         });
         setPending(null);
-      }, 500);
+      }, 350);
       return;
     }
 
-    if (!accountId) {
-      setTxError("connect a wallet first");
-      return;
-    }
-    if (shares === null || shares <= 0n) {
-      setTxError("no vault shares to queue");
-      return;
-    }
-    if (!config.vaultContract) {
-      setTxError("VITE_VAULT_CONTRACT is not set");
+    if (!accountId || !config.vaultContract || shares === null || shares <= 0n || parsedInput <= 0n) {
+      setTxError("Connect a wallet with vault shares first.");
       return;
     }
 
-    let assets: bigint;
-    try {
-      assets = parseAmount(withdrawInput);
-    } catch (cause) {
-      setTxError(cause instanceof Error ? cause.message : String(cause));
-      return;
-    }
-
-    const requested = assets >= positionValue ? shares : sharesForAssets(assets, totalAssets, totalShares);
+    const requested =
+      parsedInput >= positionValue ? shares : sharesForAssets(parsedInput, totalAssets, totalShares);
     const sharesToQueue = requested > shares ? shares : requested;
-    if (sharesToQueue <= 0n) {
-      setTxError("amount is too small to queue");
-      return;
-    }
 
     setPending("queue");
     try {
@@ -292,7 +262,7 @@ export function UserPosition({
         deposit: "0",
       });
       setTxHash(transactionHash(result));
-      setWithdrawInput("");
+      setAmountInput("");
       await load();
       onRefreshed();
     } catch (cause) {
@@ -310,14 +280,13 @@ export function UserPosition({
       setPending("claim");
       setTimeout(() => {
         setQueuedWithdrawal(null);
-        setTokenBalance((prev) => (prev ?? 0n) + 12_845_000_000n);
+        setTokenBalance((prev) => (prev ?? 0n) + 12_844_990_000n);
         setPending(null);
-      }, 500);
+      }, 350);
       return;
     }
 
     if (!accountId || !config.vaultContract) return;
-
     setPending("claim");
     try {
       if (!(await fetchStorageBalance(summary.token, accountId))) {
@@ -329,7 +298,6 @@ export function UserPosition({
           deposit: STORAGE_DEPOSIT,
         });
       }
-
       const result = await callMethod({
         contractId: config.vaultContract,
         methodName: "claim_withdrawal",
@@ -356,12 +324,11 @@ export function UserPosition({
       setTimeout(() => {
         setQueuedWithdrawal(null);
         setPending(null);
-      }, 500);
+      }, 350);
       return;
     }
 
     if (!accountId || !config.vaultContract) return;
-
     setPending("cancel");
     try {
       const result = await callMethod({
@@ -381,252 +348,272 @@ export function UserPosition({
     }
   }
 
-  const depositBlocked = demo || summary.paused || pending !== null;
-  const withdrawBlocked = demo || pending !== null || shares === null || shares <= 0n;
-
   const queuedSharesVal = queuedWithdrawal ? BigInt(queuedWithdrawal.shares) : 0n;
-  const queuedEstimatedAssets =
+  const queuedEstAssets =
     queuedSharesVal > 0n ? assetsForShares(queuedSharesVal, totalAssets, totalShares) : 0n;
   const isQueueReady =
     queuedWithdrawal !== null &&
     (queuedWithdrawal.status === "ready" ||
-      (idleAssets >= queuedEstimatedAssets && deployedAssets === 0n));
+      (idleAssets >= queuedEstAssets && deployedAssets === 0n));
 
   return (
-    <section className="panel">
-      <header className="panel-header">
-        <div>
-          <h2>Your position</h2>
-          <span className="muted">
-            {demo
-              ? "demo position"
-              : loading
-              ? "reading..."
-              : accountId
-              ? shorten(accountId, 12, 8)
-              : ""}
-          </span>
-        </div>
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          <span className="chip">Epoch #{summary.current_epoch ?? 1}</span>
-          {summary.queued_shares && BigInt(summary.queued_shares) > 0n && (
-            <span className="chip" title="Total shares queued across all depositors">
-              Queue: {formatAmount(summary.queued_shares)} shares
+    <div className="vp-col-stack">
+      {/* Manage Position Card */}
+      <section className="vp-card">
+        <header className="vp-card-header">
+          <div className="vp-card-title-row">
+            <WalletIcon width={16} height={16} style={{ color: "var(--emerald-bright)" }} />
+            <span>Manage Position</span>
+          </div>
+          <span className="vp-badge">ERC-4626 SPEC</span>
+        </header>
+
+        <div className="vp-pos-stats">
+          <div className="vp-pos-stat">
+            <span className="vp-pos-stat-label">Wallet Balance</span>
+            <span className="vp-pos-stat-val">
+              {tokenBalance === null ? "-" : `${formatPrettyAmount(tokenBalance)} ${symbol}`}
             </span>
-          )}
-        </div>
-      </header>
-
-      {demo && (
-        <p className="muted small demo-note">
-          Sample LP position. Connect a wallet and configure a vault contract to deposit or
-          withdraw for real.
-        </p>
-      )}
-
-      <div className="position-grid">
-        <div>
-          <span className="stat-label">Wallet balance</span>
-          <strong>{tokenBalance === null ? "-" : `${formatAmount(tokenBalance)} ${symbol}`}</strong>
-        </div>
-        <div>
-          <span className="stat-label">Vault shares</span>
-          <strong>{shares === null ? "-" : formatAmount(shares)}</strong>
-        </div>
-        <div>
-          <span className="stat-label">Position value</span>
-          <strong>{shares === null ? "-" : `${formatAmount(positionValue)} ${symbol}`}</strong>
-        </div>
-        <div>
-          <span className="stat-label">Unbonding Queue</span>
-          <strong>{queuedSharesVal > 0n ? `${formatAmount(queuedSharesVal)} shares` : "0 shares"}</strong>
-        </div>
-      </div>
-
-      <div className="capital-split">
-        <div
-          className="capital-split-bar"
-          role="img"
-          aria-label={`${idlePct}% idle, ${100 - idlePct}% deployed`}
-        >
-          <span className="capital-split-idle" style={{ width: `${idlePct}%` }} />
-        </div>
-        <div className="capital-split-legend">
-          <span>
-            <span className="split-dot split-dot-idle" /> Idle{" "}
-            <strong>
-              {formatAmount(idleAssets)} {symbol}
-            </strong>
-          </span>
-          <span>
-            <span className="split-dot split-dot-deployed" /> Deployed cross-chain{" "}
-            <strong>
-              {formatAmount(deployedAssets)} {symbol}
-            </strong>
-          </span>
-        </div>
-      </div>
-
-      {readError && !demo && <p className="form-error">Read failed: {readError}</p>}
-
-      {queuedWithdrawal && queuedSharesVal > 0n && (
-        <div className="owner-card" style={{ borderColor: isQueueReady ? "var(--color-ok)" : "var(--color-warn)", marginBottom: "1.25rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", width: "100%" }}>
-            <div>
-              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                <strong>Epoch Redemption Queue</strong>
-                <span className={`pill ${isQueueReady ? "pill-ok" : "pill-warn"}`}>
-                  {isQueueReady ? "Ready to Claim" : `Queued (Epoch #${queuedWithdrawal.epoch})`}
-                </span>
-              </div>
-              <p className="muted small" style={{ margin: "0.35rem 0" }}>
-                {isQueueReady
-                  ? "Yield settlement is complete! Idle liquidity has replenished; your funds are ready to claim."
-                  : "Your withdrawal is ordered in the unbonding queue. Funds unlock automatically upon cross-chain yield settlement."}
-              </p>
-              <div style={{ display: "flex", gap: "1.5rem", marginTop: "0.5rem" }}>
-                <div>
-                  <span className="stat-label">Queued Shares:</span>{" "}
-                  <strong>{formatAmount(queuedWithdrawal.shares)}</strong>
-                </div>
-                <div>
-                  <span className="stat-label">Est. Value:</span>{" "}
-                  <strong>
-                    {formatAmount(queuedEstimatedAssets)} {symbol}
-                  </strong>
-                </div>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: "0.5rem", marginLeft: "1rem" }}>
-              {isQueueReady ? (
-                <button
-                  type="button"
-                  className="button button-primary"
-                  onClick={() => void handleClaimWithdrawal()}
-                  disabled={pending !== null}
-                >
-                  {pending === "claim" ? "Claiming..." : `Claim ${symbol}`}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="button button-warn"
-                  onClick={() => void handleCancelWithdrawal()}
-                  disabled={pending !== null}
-                >
-                  {pending === "cancel" ? "Cancelling..." : "Cancel Queue"}
-                </button>
-              )}
-            </div>
+            <span className="vp-pos-stat-sub">NEAR native NEP-141</span>
+          </div>
+          <div className="vp-pos-stat">
+            <span className="vp-pos-stat-label">Vault Shares</span>
+            <span className="vp-pos-stat-val">
+              {shares === null ? "-" : `${formatPrettyAmount(shares)} VP`}
+            </span>
+            <span className="vp-pos-stat-sub">Pool share: {poolSharePct}%</span>
+          </div>
+          <div className="vp-pos-stat">
+            <span className="vp-pos-stat-label">Position Value</span>
+            <span className="vp-pos-stat-val is-emerald">
+              {shares === null ? "-" : `$${formatPrettyAmount(positionValue)} ${symbol}`}
+            </span>
+            <span className="vp-pos-stat-sub is-emerald">
+              +{formatPrettyUsd(accruedGain)} accrued
+            </span>
           </div>
         </div>
-      )}
 
-      <div className="action-grid">
-        <form className="action-card" onSubmit={(event) => void handleDeposit(event)}>
-          <h3>Deposit</h3>
-          <p className="muted small">
-            Send {symbol} to the vault. Shares are minted at the current exchange rate.
-          </p>
-          <div className="field">
-            <input
-              className="input"
-              inputMode="decimal"
-              placeholder="0.00"
-              value={depositInput}
-              onChange={(event) => setDepositInput(event.target.value)}
-              disabled={depositBlocked}
-            />
-            <button
-              type="button"
-              className="button button-ghost"
-              onClick={() => {
-                if (tokenBalance !== null) setDepositInput(formatAmount(tokenBalance));
-              }}
-              disabled={depositBlocked || tokenBalance === null || tokenBalance === 0n}
-            >
-              Max
-            </button>
-          </div>
+        <div className="vp-segmented">
           <button
-            type="submit"
-            className="button button-primary"
-            disabled={depositBlocked || depositInput.trim() === ""}
+            type="button"
+            className={`vp-seg-btn ${mode === "deposit" ? "is-active" : ""}`}
+            onClick={() => {
+              setMode("deposit");
+              setTxError(null);
+            }}
           >
-            {pending === "deposit" ? "Depositing..." : `Deposit ${symbol}`}
+            Deposit
           </button>
-          {summary.paused && <p className="muted small">Deposits are blocked while the vault is paused.</p>}
-        </form>
+          <button
+            type="button"
+            className={`vp-seg-btn ${mode === "withdraw" ? "is-active" : ""}`}
+            onClick={() => {
+              setMode("withdraw");
+              setTxError(null);
+            }}
+          >
+            Withdraw
+          </button>
+        </div>
 
-        <form className="action-card" onSubmit={(event) => void handleWithdraw(event)}>
-          <h3>Withdraw</h3>
-          <p className="muted small">
-            Burn shares for idle {symbol}. Instant withdrawal is available up to idle liquidity. For larger exits, queue for Epoch unbonding.
-          </p>
-          <div className="field">
-            <input
-              className="input"
-              inputMode="decimal"
-              placeholder="0.00"
-              value={withdrawInput}
-              onChange={(event) => setWithdrawInput(event.target.value)}
-              disabled={demo || pending !== null}
-            />
-            <button
-              type="button"
-              className="button button-ghost"
-              onClick={() => setWithdrawInput(formatAmount(maxInstant))}
-              disabled={demo || pending !== null || maxInstant === 0n}
-              title="Withdraw up to immediately available idle liquidity"
-            >
-              Instant Max
-            </button>
-            <button
-              type="button"
-              className="button button-ghost"
-              onClick={() => setWithdrawInput(formatAmount(positionValue))}
-              disabled={demo || pending !== null || positionValue === 0n}
-            >
-              Full Max
-            </button>
+        <form onSubmit={(e) => void handleSubmit(e)}>
+          <div className="vp-amount-header">
+            <span>Amount</span>
+            <span className="mono">
+              {mode === "deposit"
+                ? `Available: ${tokenBalance !== null ? formatPrettyAmount(tokenBalance) : "0.00"} ${symbol}`
+                : `Idle: ${formatPrettyAmount(idleAssets)} / Max: ${formatPrettyAmount(positionValue)} ${symbol}`}
+            </span>
           </div>
 
-          {exceedsIdle ? (
-            <div style={{ marginTop: "0.5rem" }}>
-              <p className="muted small" style={{ color: "var(--color-warn, #e5a93c)", marginBottom: "0.5rem" }}>
-                Request exceeds instant idle liquidity ({formatAmount(idleAssets)} {symbol}). Queue your shares for orderly unbonding at Epoch #{summary.current_epoch ?? 1}.
-              </p>
+          <div className="vp-amount-box">
+            <div className="vp-token-chip">
+              <span className="vp-token-circle">$</span>
+              <span>{symbol}</span>
+            </div>
+            <div className="vp-amount-controls">
+              <input
+                className="vp-amount-input"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={amountInput}
+                onChange={(e) => setAmountInput(e.target.value)}
+                disabled={pending !== null}
+              />
               <button
                 type="button"
-                className="button button-primary"
-                onClick={() => void handleQueueWithdrawal()}
-                disabled={withdrawBlocked}
-                style={{ width: "100%" }}
+                className="vp-max-btn"
+                onClick={() => {
+                  if (mode === "deposit" && tokenBalance !== null) {
+                    setAmountInput(formatAmount(tokenBalance));
+                  } else if (mode === "withdraw") {
+                    setAmountInput(formatAmount(positionValue));
+                  }
+                }}
+                disabled={pending !== null}
               >
-                {pending === "queue" ? "Queueing..." : `Queue for Epoch #${summary.current_epoch ?? 1} Unbonding`}
+                MAX
               </button>
             </div>
+          </div>
+
+          <div className="vp-summary-box">
+            <div className="vp-summary-row">
+              <span style={{ color: "var(--muted)" }}>Exchange Rate Index</span>
+              <span className="mono">
+                1 VP-{symbol} = {formatSharePrice(summary.share_price)} {symbol}
+              </span>
+            </div>
+            <div className="vp-summary-row">
+              <span style={{ color: "var(--muted)" }}>
+                {mode === "deposit"
+                  ? "Est. Shares Received"
+                  : withdrawExceedsIdle
+                  ? "Redemption Path"
+                  : "Est. Assets Returned"}
+              </span>
+              <span className="mono" style={{ color: withdrawExceedsIdle ? "var(--amber-bright)" : "var(--emerald-bright)", fontWeight: 600 }}>
+                {mode === "deposit"
+                  ? `${formatPrettyAmount(estimatedSharesOut)} VP-${symbol}`
+                  : withdrawExceedsIdle
+                  ? `Epoch #${summary.current_epoch ?? 4} Unbonding Queue`
+                  : `${parsedInput > 0n ? formatPrettyAmount(parsedInput) : "0.00"} ${symbol}`}
+              </span>
+            </div>
+          </div>
+
+          {withdrawExceedsIdle ? (
+            <button
+              type="submit"
+              className="vp-cta-amber"
+              disabled={pending !== null || parsedInput <= 0n}
+            >
+              <span>
+                {pending === "queue"
+                  ? "Queueing Unbonding..."
+                  : `Queue ${amountInput || "0"} ${symbol} for Epoch #${summary.current_epoch ?? 4}`}
+              </span>
+              <ArrowRightIcon width={15} height={15} />
+            </button>
           ) : (
             <button
               type="submit"
-              className="button button-primary"
-              disabled={withdrawBlocked || withdrawInput.trim() === ""}
+              className="vp-cta-white"
+              disabled={pending !== null || (mode === "deposit" && summary.paused)}
             >
-              {pending === "withdraw" ? "Withdrawing..." : `Instant Withdraw ${symbol}`}
+              <span>
+                {pending === "deposit"
+                  ? "Depositing..."
+                  : pending === "withdraw"
+                  ? "Withdrawing..."
+                  : mode === "deposit"
+                  ? `Deposit ${symbol}`
+                  : `Withdraw ${symbol}`}
+              </span>
+              <ArrowRightIcon width={15} height={15} />
             </button>
           )}
         </form>
-      </div>
 
-      {txError && <p className="form-error">{txError}</p>}
-      {txHash && (
-        <p className="muted small">
-          Transaction:{" "}
-          <a href={explorerTxUrl(txHash)} target="_blank" rel="noreferrer">
-            {shorten(txHash, 10, 8)}
-          </a>
-        </p>
-      )}
-    </section>
+        {readError && !demo && <p className="vp-alert-error">RPC Read failed: {readError}</p>}
+        {txError && <p className="vp-alert-error">{txError}</p>}
+        {txHash && (
+          <p className="mono" style={{ fontSize: "0.72rem", color: "var(--emerald-bright)", marginTop: "0.65rem" }}>
+            Tx confirmed:{" "}
+            <a
+              href={explorerTxUrl(txHash)}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: "inherit" }}
+            >
+              {shorten(txHash, 10, 8)} ↗
+            </a>
+          </p>
+        )}
+      </section>
+
+      {/* Epoch Redemption Queue Card */}
+      <section className="vp-card">
+        <header className="vp-card-header">
+          <div className="vp-card-title-row">
+            <HourglassIcon width={15} height={15} style={{ color: "var(--amber-bright)" }} />
+            <span>Epoch Redemption Queue</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+            <span className="vp-badge vp-badge-emerald">
+              Epoch #{summary.current_epoch ?? 4} Active
+            </span>
+            <span style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
+              Next fill on solver cycle
+            </span>
+          </div>
+        </header>
+
+        {queuedWithdrawal && queuedSharesVal > 0n ? (
+          <table className="vp-table">
+            <thead>
+              <tr>
+                <th>Ticket</th>
+                <th>Requested Shares</th>
+                <th>Est. Value</th>
+                <th>Status</th>
+                <th style={{ textAlign: "right" }}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="mono" style={{ color: "var(--muted)" }}>
+                  #{queuedWithdrawal.epoch ? `10${queuedWithdrawal.epoch}` : "104"}
+                </td>
+                <td className="mono" style={{ fontWeight: 500 }}>
+                  {formatPrettyAmount(queuedWithdrawal.shares)} VP-{symbol}
+                </td>
+                <td className="mono" style={{ color: "var(--emerald-bright)", fontWeight: 600 }}>
+                  {formatPrettyUsd(queuedEstAssets)}
+                </td>
+                <td>
+                  <span className={`vp-badge ${isQueueReady ? "vp-badge-emerald" : "vp-badge-amber"}`}>
+                    <span className={`vp-dot ${isQueueReady ? "" : "vp-dot-amber"}`} />
+                    <span>{isQueueReady ? "Ready to Claim" : "Reserved & Settling"}</span>
+                  </span>
+                </td>
+                <td style={{ textAlign: "right" }}>
+                  {isQueueReady ? (
+                    <button
+                      type="button"
+                      className="vp-icon-btn"
+                      style={{ color: "var(--emerald-bright)", borderColor: "var(--emerald-border)" }}
+                      onClick={() => void handleClaimWithdrawal()}
+                      disabled={pending !== null}
+                    >
+                      {pending === "claim" ? "Claiming..." : "Claim"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="vp-icon-btn"
+                      onClick={() => void handleCancelWithdrawal()}
+                      disabled={pending !== null}
+                    >
+                      {pending === "cancel" ? "Cancelling..." : "Cancel"}
+                    </button>
+                  )}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        ) : (
+          <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: "0.25rem 0" }}>
+            No pending unbonding tickets for this account. Withdrawals exceeding idle liquidity queue here automatically with zero penalty.
+          </p>
+        )}
+
+        <div className="vp-queue-note">
+          <InfoIcon width={14} height={14} style={{ flexShrink: 0 }} />
+          <span>Unbonded capital is stored securely in NEAR contract escrow until solver completion.</span>
+        </div>
+      </section>
+    </div>
   );
 }

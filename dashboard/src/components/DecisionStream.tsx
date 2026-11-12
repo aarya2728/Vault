@@ -138,79 +138,78 @@ export function DecisionStream() {
     : "DEMO FEED";
 
   return (
-    <section className="panel decision-panel">
-      <header className="panel-header">
-        <div>
-          <h2>Agent Reasoning Stream</h2>
-          <span className="panel-subtitle">
-            Hourly evaluation loop · net spread gate · 1Click execution trace
+    <section className="vp-card">
+      <header className="vp-card-header">
+        <div className="vp-card-title-row">
+          <span className="vp-dot" />
+          <span>Agent Reasoning Stream</span>
+          <span className="mono" style={{ fontSize: "0.7rem", color: "var(--muted)", fontWeight: 400 }}>
+            vaultpilot-agent • strategy.ts ({utcOffset()})
           </span>
         </div>
-        <span className={`stream-mode ${mode === "LIVE FEED" ? "live" : ""}`}>
-          <span className="stream-dot" />
-          {mode}
+        <span className={`vp-badge ${mode === "LIVE FEED" ? "vp-badge-emerald" : ""}`}>
+          <span className="vp-dot" />
+          <span>{mode}</span>
         </span>
       </header>
 
-      <div className="decision-terminal">
-        <div className="terminal-chrome">
-          <span className="terminal-dot dot-red" />
-          <span className="terminal-dot dot-amber" />
-          <span className="terminal-dot dot-green" />
-          <span className="terminal-title">vaultpilot-agent · strategy.ts</span>
-          <span className="terminal-time">{utcOffset()}</span>
-        </div>
-
-        <div className="terminal-body" role="log" aria-live="polite">
-          <AnimatePresence initial={false}>
-            {entries.map((entry, index) => (
-              <motion.div
-                key={`${entry.ts}-${entry.event}-${index}`}
-                className={`terminal-line terminal-${entry.level}`}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.28, ease: "easeOut" }}
-              >
-                <span className="terminal-time">[{logTime(entry.ts)}]</span>
-                <span className="terminal-event">{entry.event}</span>
-                {entry.metrics && (
-                  <span className="terminal-math">
-                    <span className="math-chip external">
-                      ext {pct(entry.metrics.externalApyBps)}
-                    </span>
-                    <span className="math-op">-</span>
-                    <span className="math-chip near">
-                      near {pct(entry.metrics.nearApyBps)}
-                    </span>
-                    <span className="math-op">-</span>
-                    <span className="math-chip cost">
-                      cost {pct(entry.metrics.annualizedCostBps)}
-                    </span>
-                    <span className="math-op">=</span>
-                    <span className="math-chip net">
-                      net {pct(entry.metrics.netSpreadBps)}
-                    </span>
-                    <span
-                      className={`math-action action-${entry.metrics.action.toLowerCase()}`}
-                    >
-                      {entry.metrics.action}
-                    </span>
+      <div
+        className="vp-inset-panel mono"
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.5rem",
+          fontSize: "0.74rem",
+          maxHeight: "340px",
+          overflowY: "auto",
+        }}
+        role="log"
+        aria-live="polite"
+      >
+        <AnimatePresence initial={false}>
+          {entries.map((entry, index) => (
+            <motion.div
+              key={`${entry.ts}-${entry.event}-${index}`}
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: "0.55rem",
+                padding: "0.4rem 0",
+                borderBottom: "1px solid var(--border)",
+              }}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.22 }}
+            >
+              <span style={{ color: "var(--muted)" }}>[{logTime(entry.ts)}]</span>
+              <span className={`vp-badge ${entry.level === "warn" ? "vp-badge-amber" : entry.level === "error" ? "vp-badge-red" : "vp-badge-emerald"}`}>
+                {entry.event}
+              </span>
+              {entry.metrics && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", flexWrap: "wrap" }}>
+                  <span className="vp-badge">ext {pct(entry.metrics.externalApyBps)}</span>
+                  <span style={{ color: "var(--muted)" }}>-</span>
+                  <span className="vp-badge">near {pct(entry.metrics.nearApyBps)}</span>
+                  <span style={{ color: "var(--muted)" }}>-</span>
+                  <span className="vp-badge">cost {pct(entry.metrics.annualizedCostBps)}</span>
+                  <span style={{ color: "var(--muted)" }}>=</span>
+                  <span className="vp-badge vp-badge-emerald">net {pct(entry.metrics.netSpreadBps)}</span>
+                  <span className={`vp-badge ${entry.metrics.action === "APPROVED" ? "vp-badge-emerald" : "vp-badge-amber"}`}>
+                    {entry.metrics.action}
                   </span>
-                )}
-                <span className="terminal-message">{entry.message}</span>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-          <div className="terminal-cursor">
-            <span>vaultpilot@near:~$</span> <span className="cursor-block">▌</span>
-          </div>
-        </div>
+                </span>
+              )}
+              <span style={{ color: "var(--text-secondary)" }}>{entry.message}</span>
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
 
       {feedError && (
-        <p className="muted small">
-          Live log endpoint unavailable ({feedError}); showing the bundled demo stream.
+        <p style={{ fontSize: "0.72rem", color: "var(--muted)", marginTop: "0.65rem" }}>
+          Live log endpoint unavailable ({feedError}); showing bundled demo stream.
         </p>
       )}
     </section>

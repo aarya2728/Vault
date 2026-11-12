@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { formatBps, formatUsd, type VaultSummary } from "../lib/vault.js";
+import { formatBps, type VaultSummary } from "../lib/vault.js";
+import { DiamondIcon } from "./Icons.js";
 
 interface VaultYieldCalculatorProps {
   summary: VaultSummary;
@@ -9,35 +10,35 @@ const STRATEGIES = [
   {
     id: "usdc-arb",
     name: "USDC Cross-Chain Intent Arbitrage",
-    pair: "NEAR ↔ Arbitrum",
+    pair: "NEAR ↔ Arbitrum (Morpho Blue)",
     status: "ACTIVE",
-    targetApyBps: 1420, // 14.2%
-    baseApyBps: 450, // 4.5%
+    targetApyBps: 1420,
+    baseApyBps: 450,
     desc: "Autonomous rebalancing between NEAR native yield and Arbitrum money markets via 1Click solvers.",
   },
   {
-    id: "wnear-intent",
-    name: "wNEAR Liquid Staking Intent Vault",
-    pair: "NEAR ↔ Base / Optimism",
-    status: "COMING SOON",
-    targetApyBps: 1850, // 18.5%
-    baseApyBps: 750, // 7.5%
-    desc: "Captures cross-chain staking yield differentials using NEP-141 wrapped NEAR with zero bridge lockup.",
+    id: "usdc-base",
+    name: "USDC Aave v3 Prime Strategy",
+    pair: "NEAR ↔ Base L2",
+    status: "ACTIVE",
+    targetApyBps: 920,
+    baseApyBps: 450,
+    desc: "Overcollateralized USDC supply on Base L2 controlled directly by NEAR Chain Signatures MPC.",
   },
   {
-    id: "usdt-omni",
-    name: "USDT Omni-Route Yield Pilot",
-    pair: "NEAR ↔ Solana / EVM",
-    status: "PLANNED",
-    targetApyBps: 1680, // 16.8%
-    baseApyBps: 420, // 4.2%
-    desc: "Multi-venue intent solver distribution optimizing stablecoin borrow/lending spreads.",
+    id: "usdc-comp",
+    name: "Compound v3 Comet + COMP Incentives",
+    pair: "NEAR ↔ Arbitrum One",
+    status: "ACTIVE",
+    targetApyBps: 840,
+    baseApyBps: 420,
+    desc: "Low-volatility USDC supply pool capturing institutional borrow demand plus COMP reward emissions.",
   },
 ];
 
 export function VaultYieldCalculator({ summary }: VaultYieldCalculatorProps) {
   const [selectedStrategy, setSelectedStrategy] = useState(STRATEGIES[0]);
-  const [depositAmount, setDepositAmount] = useState("5000");
+  const [depositAmount, setDepositAmount] = useState("25000");
   const [days, setDays] = useState(90);
 
   const numAmount = parseFloat(depositAmount) || 0;
@@ -45,169 +46,147 @@ export function VaultYieldCalculator({ summary }: VaultYieldCalculatorProps) {
   const baseApy = selectedStrategy.baseApyBps / 10000;
   const spreadBps = selectedStrategy.targetApyBps - selectedStrategy.baseApyBps;
 
-  // Compounded interest projections: A = P * (1 + r * (days/365))
   const vaultEarnings = numAmount * targetApy * (days / 365);
   const baseEarnings = numAmount * baseApy * (days / 365);
   const netAlpha = Math.max(0, vaultEarnings - baseEarnings);
 
-  const presets = ["1000", "5000", "25000", "100000"];
+  const presets = ["5000", "25000", "100000", "500000"];
   const durationPresets = [
-    { label: "30 Days", val: 30 },
-    { label: "90 Days", val: 90 },
-    { label: "180 Days", val: 180 },
-    { label: "1 Year", val: 365 },
+    { label: "30D", val: 30 },
+    { label: "90D", val: 90 },
+    { label: "180D", val: 180 },
+    { label: "1Y", val: 365 },
   ];
 
+  const hasCapacity = BigInt(summary.idle_assets) > 0n || BigInt(summary.total_assets) > 0n;
+
   return (
-    <section className="panel yield-calculator-panel">
-      <header className="panel-header">
-        <div>
-          <h2>Vault Command Center &amp; Yield Engine</h2>
-          <span className="panel-subtitle">
-            Simulate autonomous cross-chain intent alpha vs. standard single-chain yields
-          </span>
+    <section className="vp-card">
+      <header className="vp-card-header">
+        <div className="vp-card-title-row">
+          <DiamondIcon width={16} height={16} style={{ color: "var(--emerald-bright)" }} />
+          <span>Multi-Strategy Yield &amp; Alpha Projection</span>
         </div>
-        <span className="badge badge-in">ERC-4626 VIRTUAL SHARES</span>
+        <span className="vp-badge vp-badge-emerald">
+          {hasCapacity ? "Routes Operational" : "Engine Ready"}
+        </span>
       </header>
 
-      {/* Multi-Strategy Selector */}
-      <div className="strategy-tabs-grid">
-        {STRATEGIES.map((strat) => (
-          <button
-            key={strat.id}
-            type="button"
-            onClick={() => setSelectedStrategy(strat)}
-            className={`strategy-tab-card ${
-              selectedStrategy.id === strat.id ? "strategy-tab-active" : ""
-            }`}
-          >
-            <div className="strategy-tab-top">
-              <span className="strategy-pair">{strat.pair}</span>
-              <span
-                className={`badge ${
-                  strat.status === "ACTIVE" ? "badge-in" : "badge-demo"
-                }`}
-              >
-                {strat.status}
-              </span>
-            </div>
-            <strong className="strategy-title">{strat.name}</strong>
-            <div className="strategy-metrics">
-              <span>Target: <strong>{formatBps(strat.targetApyBps)} APY</strong></span>
-              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">+{formatBps(strat.targetApyBps - strat.baseApyBps)} spread</span>
-            </div>
-          </button>
-        ))}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginBottom: "1.1rem" }}>
+        {STRATEGIES.map((strategy) => {
+          const isSelected = selectedStrategy.id === strategy.id;
+          return (
+            <button
+              key={strategy.id}
+              type="button"
+              onClick={() => setSelectedStrategy(strategy)}
+              className={`vp-position-card ${isSelected ? "is-selected" : ""}`}
+              style={{ textAlign: "left", padding: "0.85rem 1rem" }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+                <span className="vp-badge vp-badge-emerald" style={{ fontSize: "0.62rem" }}>
+                  {strategy.status}
+                </span>
+                <span className="mono" style={{ fontSize: "0.7rem", color: "var(--muted)" }}>
+                  {strategy.pair}
+                </span>
+              </div>
+              <div style={{ fontSize: "0.86rem", fontWeight: 600, color: "var(--text)", marginBottom: "0.25rem" }}>
+                {strategy.name}
+              </div>
+              <div className="mono" style={{ fontSize: "1rem", fontWeight: 600, color: "var(--emerald-bright)" }}>
+                {formatBps(strategy.targetApyBps)} APY
+              </div>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Interactive Controls & Live Projection */}
-      <div className="calculator-body-grid">
-        <div className="calculator-inputs">
-          <div className="input-group">
-            <label className="stat-label">Deposit Simulation ($)</label>
-            <input
-              type="number"
-              min="100"
-              step="100"
-              value={depositAmount}
-              onChange={(e) => setDepositAmount(e.target.value)}
-              className="input text-lg font-mono"
-              placeholder="e.g. 5000"
-            />
-            <div className="preset-row">
+      <div className="vp-grid-2">
+        <div className="vp-inset-panel" style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.74rem", color: "var(--muted)", marginBottom: "0.4rem" }}>
+              <span>Allocation Principal (USDC)</span>
+              <span className="mono">Spread: +{formatBps(spreadBps)}</span>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <input
+                type="number"
+                className="vp-input"
+                value={depositAmount}
+                onChange={(e) => setDepositAmount(e.target.value)}
+                min="0"
+                style={{ flex: 1, minWidth: "120px" }}
+              />
               {presets.map((p) => (
                 <button
                   key={p}
                   type="button"
+                  className={`vp-pill-btn ${depositAmount === p ? "is-active" : ""}`}
                   onClick={() => setDepositAmount(p)}
-                  className={`button button-ghost ${depositAmount === p ? "button-primary" : ""}`}
                 >
-                  ${parseInt(p).toLocaleString()}
+                  ${(Number(p) / 1000).toFixed(0)}k
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="input-group" style={{ marginTop: "1.25rem" }}>
-            <label className="stat-label">Strategy Hold Horizon</label>
-            <div className="duration-grid">
-              {durationPresets.map((d) => (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.74rem", color: "var(--muted)", marginBottom: "0.4rem" }}>
+              <span>Hold Horizon</span>
+              <span className="mono" style={{ color: "var(--text)" }}>{days} Days</span>
+            </div>
+            <div style={{ display: "flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                type="range"
+                min="7"
+                max="365"
+                value={days}
+                onChange={(e) => setDays(Number(e.target.value))}
+                style={{ flex: 1, accentColor: "#10b981" }}
+              />
+              {durationPresets.map((dp) => (
                 <button
-                  key={d.val}
+                  key={dp.val}
                   type="button"
-                  onClick={() => setDays(d.val)}
-                  className={`button ${days === d.val ? "button-primary" : "button-ghost"}`}
+                  className={`vp-pill-btn ${days === dp.val ? "is-active" : ""}`}
+                  onClick={() => setDays(dp.val)}
                 >
-                  {d.label}
+                  {dp.label}
                 </button>
               ))}
-            </div>
-          </div>
-
-          <div className="vault-health-summary">
-            <div className="health-item">
-              <span className="stat-label">Current Share Price</span>
-              <span className="font-mono">{summary.share_price ? `${(Number(summary.share_price) / 1e24).toFixed(4)} USDC` : "1.0000 USDC"}</span>
-            </div>
-            <div className="health-item">
-              <span className="stat-label">Total Vault TVL</span>
-              <span className="font-mono">{formatUsd(summary.total_assets)}</span>
-            </div>
-            <div className="health-item">
-              <span className="stat-label">Vault Reserve Idle</span>
-              <span className="font-mono">{formatUsd(summary.idle_assets)}</span>
             </div>
           </div>
         </div>
 
-        {/* Projection Comparison Card */}
-        <div className="projection-card">
-          <div className="projection-header">
-            <span>Projected Returns over {days} Days</span>
-            <span className="text-xs uppercase font-mono text-muted">Autonomous Rebalancing</span>
-          </div>
-
-          <div className="projection-comparison">
-            <div className="projection-metric">
-              <span className="stat-label">VaultPilot Projected Yield</span>
-              <strong className="text-2xl text-emerald-600 dark:text-emerald-400">
-                +${vaultEarnings.toFixed(2)}
-              </strong>
-              <span className="text-xs text-muted">
-                at {formatBps(selectedStrategy.targetApyBps)} Strategy APY
-              </span>
+        <div className="vp-inset-panel" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.65rem", alignContent: "center" }}>
+          <div className="vp-metric-box">
+            <div style={{ fontSize: "0.68rem", color: "var(--muted)" }}>Vault Yield</div>
+            <div className="mono" style={{ fontSize: "1.02rem", fontWeight: 600, color: "var(--emerald-bright)", marginTop: "4px" }}>
+              +${vaultEarnings.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
-
-            <div className="projection-divider" />
-
-            <div className="projection-metric">
-              <span className="stat-label">Standard NEAR Native Yield</span>
-              <strong className="text-lg">
-                +${baseEarnings.toFixed(2)}
-              </strong>
-              <span className="text-xs text-muted">
-                at {formatBps(selectedStrategy.baseApyBps)} Base APY
-              </span>
+            <div className="mono" style={{ fontSize: "0.66rem", color: "var(--muted)" }}>
+              at {formatBps(selectedStrategy.targetApyBps)}
             </div>
           </div>
-
-          <div className="alpha-badge-box">
-            <div className="alpha-text">
-              <span className="alpha-label">
-                Intent Alpha Generated
-              </span>
-              <p className="text-sm font-bold mt-0.5">
-                +${netAlpha.toFixed(2)} extra profit (+{formatBps(spreadBps)} spread)
-              </p>
+          <div className="vp-metric-box">
+            <div style={{ fontSize: "0.68rem", color: "var(--muted)" }}>NEAR Base</div>
+            <div className="mono" style={{ fontSize: "1.02rem", fontWeight: 600, marginTop: "4px" }}>
+              +${baseEarnings.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
-            <span className="alpha-pill">
-              {(vaultEarnings / (baseEarnings || 1)).toFixed(1)}x Higher
-            </span>
+            <div className="mono" style={{ fontSize: "0.66rem", color: "var(--muted)" }}>
+              at {formatBps(selectedStrategy.baseApyBps)}
+            </div>
           </div>
-
-          <p className="text-xs text-muted mt-4 leading-relaxed">
-            * Yield is captured autonomously via 1Click solvers and credited to the vault contract on-chain. NAV appreciates directly into user share value upon rebalance settlement.
-          </p>
+          <div className="vp-metric-box" style={{ borderColor: "var(--emerald-border)" }}>
+            <div style={{ fontSize: "0.68rem", color: "var(--emerald-bright)" }}>Net Intent Alpha</div>
+            <div className="mono" style={{ fontSize: "1.02rem", fontWeight: 600, color: "var(--emerald-bright)", marginTop: "4px" }}>
+              +${netAlpha.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <div className="mono" style={{ fontSize: "0.66rem", color: "var(--muted)" }}>
+              Outperformance
+            </div>
+          </div>
         </div>
       </div>
     </section>

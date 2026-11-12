@@ -9,18 +9,20 @@ import {
   type VaultSummary,
   config,
 } from "../lib/vault.js";
+import { RouteIcon } from "./Icons.js";
 
-const DEFAULT_ORIGIN_ASSET = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"; // NEAR USDC
-const DEFAULT_DEST_ASSET = "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near"; // Arb USDC
+const DEFAULT_ORIGIN_ASSET = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
+const DEFAULT_DEST_ASSET = "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near";
 
 export function QuoteSimulator({ summary }: { summary: VaultSummary }) {
-  const [amountInput, setAmountInput] = useState("25");
+  const [amountInput, setAmountInput] = useState("2500");
   const [destinationAsset, setDestinationAsset] = useState(
     summary.policy.allowed_destination_assets[0] || DEFAULT_DEST_ASSET,
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [quoteResult, setQuoteResult] = useState<OneClickQuoteResult | null>(null);
+  const [showPayload, setShowPayload] = useState(false);
 
   async function handleSimulate(e: FormEvent) {
     e.preventDefault();
@@ -47,9 +49,6 @@ export function QuoteSimulator({ summary }: { summary: VaultSummary }) {
     }
   }
 
-  const [showPayload, setShowPayload] = useState(false);
-
-  // Evaluate policy compliance
   let parsedAmount = 0n;
   try {
     parsedAmount = parseAmount(amountInput);
@@ -70,13 +69,12 @@ export function QuoteSimulator({ summary }: { summary: VaultSummary }) {
   const allPolicyPass =
     passesMin && passesMax && passesDaily && passesLiquidity && passesAsset;
 
-  // Strategy Spread Formula Calculation
-  const externalApyBps = 1200; // 12.0%
-  const nearApyBps = 450; // 4.5%
-  const minSpreadBps = 150; // 1.5%
+  const externalApyBps = 1420;
+  const nearApyBps = 450;
+  const minSpreadBps = 150;
   const holdDays = 30;
 
-  let costBps = 15; // default estimate
+  let costBps = 12;
   if (quoteResult?.quote?.amountInUsd && quoteResult?.quote?.amountOutUsd) {
     const inUsd = parseFloat(quoteResult.quote.amountInUsd);
     const outUsd = parseFloat(quoteResult.quote.amountOutUsd);
@@ -89,12 +87,12 @@ export function QuoteSimulator({ summary }: { summary: VaultSummary }) {
   const shouldEnter = allPolicyPass && netSpreadBps >= minSpreadBps;
 
   const mockPayload = {
-    contractId: config.vaultContract || "vault.near",
-    methodName: "rebalance_out",
+    contractId: config.vaultContract || "vault.roundvest2883.testnet",
+    methodName: "rebalance_out_portfolio",
     args: {
       amount: parsedAmount.toString(),
       destination_asset: destinationAsset,
-      deposit_address: quoteResult?.quote?.depositAddress || "1click-solver-deposit.near",
+      deposit_address: quoteResult?.quote?.depositAddress || "0x9f2c7a6b1e4d8c3f5a0b2d7e9c1f4a6b8d3e5c70",
       min_out: quoteResult?.quote?.minAmountOut || parsedAmount.toString(),
       reason: `spread ${netSpreadBps}bps >= ${minSpreadBps}bps; apy ${externalApyBps} vs ${nearApyBps}`,
     },
@@ -103,211 +101,141 @@ export function QuoteSimulator({ summary }: { summary: VaultSummary }) {
   };
 
   return (
-    <section className="panel">
-      <header className="panel-header">
-        <div>
-          <h2>1Click Intent & Policy Pre-Flight Inspector</h2>
-          <span className="panel-subtitle">
-            Test live NEAR Intents quote against on-chain vault guardrails
-          </span>
+    <section className="vp-card">
+      <header className="vp-card-header">
+        <div className="vp-card-title-row">
+          <RouteIcon width={16} height={16} style={{ color: "var(--emerald-bright)" }} />
+          <span>1Click Intent &amp; Policy Pre-Flight Inspector</span>
         </div>
-        <span className={`pill ${allPolicyPass ? "pill-ok" : "pill-warn"}`}>
+        <span className={`vp-badge ${allPolicyPass ? "vp-badge-emerald" : "vp-badge-amber"}`}>
           {allPolicyPass ? "Policy Cleared" : "Policy Restrained"}
         </span>
       </header>
 
-      <form onSubmit={handleSimulate} className="quote-sim-form">
-        <div className="form-row">
-          <div>
-            <label className="stat-label">Simulate Amount ({config.tokenSymbol})</label>
-            <input
-              type="text"
-              value={amountInput}
-              onChange={(e) => setAmountInput(e.target.value)}
-              placeholder="e.g. 25"
-              className="input"
-            />
+      <form onSubmit={(e) => void handleSimulate(e)} style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr auto", gap: "0.75rem", alignItems: "end", marginBottom: "0.85rem" }}>
+        <div>
+          <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginBottom: "0.3rem" }}>
+            Amount ({config.tokenSymbol})
           </div>
-          <div>
-            <label className="stat-label">Destination Asset (Allowed only)</label>
-            <select
-              value={destinationAsset}
-              onChange={(e) => setDestinationAsset(e.target.value)}
-              className="select"
-            >
-              {summary.policy.allowed_destination_assets.map((asset) => (
-                <option key={asset} value={asset}>
-                  {shorten(asset, 16, 8)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div style={{ display: "flex", alignItems: "flex-end" }}>
-            <button type="submit" className="button button-primary" disabled={loading}>
-              {loading ? "Fetching Quote..." : "Fetch Live 1Click Quote"}
-            </button>
-          </div>
+          <input
+            type="text"
+            value={amountInput}
+            onChange={(e) => setAmountInput(e.target.value)}
+            placeholder="2500"
+            className="vp-input"
+            style={{ width: "100%" }}
+          />
         </div>
+        <div>
+          <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginBottom: "0.3rem" }}>
+            Allowed Destination Asset
+          </div>
+          <select
+            value={destinationAsset}
+            onChange={(e) => setDestinationAsset(e.target.value)}
+            className="vp-input"
+            style={{ width: "100%" }}
+          >
+            {summary.policy.allowed_destination_assets.map((asset) => (
+              <option key={asset} value={asset}>
+                {asset.includes("arb") ? "Arbitrum USDC — " : asset.includes("base") ? "Base USDC — " : ""}
+                {shorten(asset, 14, 8)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button type="submit" className="vp-cta-white" style={{ width: "auto", padding: "0.55rem 1.15rem" }} disabled={loading}>
+          {loading ? "Fetching Quote..." : "Fetch Live 1Click Quote"}
+        </button>
       </form>
 
-      <p className="muted small">
-        Dry, non-binding quote: 1Click answers with live solver pricing but does not reserve a
-        deposit address. The agent uses its configured destination recipient for real moves.
-      </p>
+      {error && <div className="vp-alert-warn" style={{ marginBottom: "0.85rem" }}>Quote check notice: {error}</div>}
 
-      {error && (
-        <div className="alert alert-warn" style={{ marginTop: "1rem" }}>
-          <strong>Quote failed:</strong> {error}
+      <div className="vp-grid-2">
+        {/* Guardrails Checklist */}
+        <div className="vp-inset-panel">
+          <div className="mono" style={{ fontSize: "0.7rem", color: "var(--muted)", marginBottom: "0.6rem" }}>
+            ON-CHAIN GUARDRAIL VERIFICATION
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", fontSize: "0.78rem" }}>
+            {[
+              { ok: passesMin, label: `>= Min Move (${formatAmount(minMove)})` },
+              { ok: passesMax, label: `<= Max Per Move (${formatAmount(maxPerMove)})` },
+              { ok: passesDaily, label: `<= Daily Remaining (${formatAmount(dailyRemaining)})` },
+              { ok: passesLiquidity, label: `<= Idle Liquidity (${formatAmount(idleAssets)})` },
+              { ok: passesAsset, label: "Allowlisted Destination Asset" },
+            ].map((item) => (
+              <div key={item.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ color: "var(--text-secondary)" }}>{item.label}</span>
+                <span className={`vp-badge ${item.ok ? "vp-badge-emerald" : "vp-badge-red"}`}>
+                  {item.ok ? "PASS" : "FAIL"}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
-      )}
 
-      {/* On-Chain Policy Verification Matrix */}
-      <div className="policy-matrix">
-        <h3>On-Chain Vault Policy Verification</h3>
-        <table className="matrix-table">
-          <thead>
-            <tr>
-              <th>Guardrail</th>
-              <th>Policy Limit</th>
-              <th>Move Value</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Min Move</td>
-              <td>&ge; {formatAmount(summary.policy.min_move)}</td>
-              <td>{formatAmount(parsedAmount)}</td>
-              <td>
-                <span className={`badge ${passesMin ? "badge-in" : "badge-out"}`}>
-                  {passesMin ? "PASS" : "FAIL"}
-                </span>
-              </td>
-            </tr>
-            <tr>
-              <td>Max Per Move</td>
-              <td>&le; {formatAmount(summary.policy.max_per_move)}</td>
-              <td>{formatAmount(parsedAmount)}</td>
-              <td>
-                <span className={`badge ${passesMax ? "badge-in" : "badge-out"}`}>
-                  {passesMax ? "PASS" : "FAIL"}
-                </span>
-              </td>
-            </tr>
-            <tr>
-              <td>Daily Cap Headroom</td>
-              <td>&le; {formatAmount(dailyRemaining)}</td>
-              <td>{formatAmount(parsedAmount)}</td>
-              <td>
-                <span className={`badge ${passesDaily ? "badge-in" : "badge-out"}`}>
-                  {passesDaily ? "PASS" : "FAIL"}
-                </span>
-              </td>
-            </tr>
-            <tr>
-              <td>Idle Liquidity</td>
-              <td>&le; {formatAmount(summary.idle_assets)}</td>
-              <td>{formatAmount(parsedAmount)}</td>
-              <td>
-                <span className={`badge ${passesLiquidity ? "badge-in" : "badge-out"}`}>
-                  {passesLiquidity ? "PASS" : "FAIL"}
-                </span>
-              </td>
-            </tr>
-            <tr>
-              <td>Allowed Destination</td>
-              <td>Allowlist verified</td>
-              <td>{shorten(destinationAsset, 8, 6)}</td>
-              <td>
-                <span className={`badge ${passesAsset ? "badge-in" : "badge-out"}`}>
-                  {passesAsset ? "PASS" : "FAIL"}
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      {quoteResult && (
-        <div className="live-quote-results">
-          <h3>Live 1Click Solver Response</h3>
-          <div className="quote-grid">
-            <div>
-              <span className="stat-label">Offered Output</span>
-              <strong>{quoteResult.quote.amountOutFormatted}</strong>
+        {/* Spread Math & Decision */}
+        <div className="vp-inset-panel">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
+            <span className="mono" style={{ fontSize: "0.7rem", color: "var(--muted)" }}>
+              SPREAD ALPHA COMPUTATION
+            </span>
+            <span className={`vp-badge ${shouldEnter ? "vp-badge-emerald" : "vp-badge-amber"}`}>
+              {shouldEnter ? "ENTER POSITION" : "HOLD / SKIP"}
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.55rem" }}>
+            <div className="vp-metric-box">
+              <div style={{ fontSize: "0.68rem", color: "var(--muted)" }}>Quote Cost</div>
+              <div className="mono" style={{ fontSize: "0.88rem", fontWeight: 600 }}>{formatBps(costBps)}</div>
             </div>
-            <div>
-              <span className="stat-label">Min Guaranteed Out</span>
-              <span className="mono">{formatAmount(quoteResult.quote.minAmountOut)}</span>
+            <div className="vp-metric-box">
+              <div style={{ fontSize: "0.68rem", color: "var(--muted)" }}>Annualized Cost</div>
+              <div className="mono" style={{ fontSize: "0.88rem", fontWeight: 600 }}>{formatBps(annualizedCostBps)}</div>
             </div>
-            <div>
-              <span className="stat-label">Max Slippage</span>
-              <span>{formatBps(summary.policy.max_slippage_bps)}</span>
+            <div className="vp-metric-box">
+              <div style={{ fontSize: "0.68rem", color: "var(--muted)" }}>Target vs Base</div>
+              <div className="mono" style={{ fontSize: "0.84rem" }}>14.20% vs 4.50%</div>
             </div>
-            <div>
-              <span className="stat-label">Est. Solver Duration</span>
-              <span>{quoteResult.quote.timeEstimate ? `${quoteResult.quote.timeEstimate}s` : "~30s"}</span>
+            <div className="vp-metric-box" style={{ borderColor: "var(--emerald-border)" }}>
+              <div style={{ fontSize: "0.68rem", color: "var(--emerald-bright)" }}>Net Spread</div>
+              <div className="mono" style={{ fontSize: "0.92rem", fontWeight: 600, color: "var(--emerald-bright)" }}>
+                +{formatBps(netSpreadBps)}
+              </div>
             </div>
           </div>
-          <p className="muted small" style={{ marginTop: "0.5rem" }}>
-            Correlation ID: <code>{quoteResult.correlationId}</code> &bull; Solver quotes are cryptographically signed by Chaindefuser.
-          </p>
 
-          {/* Strategy Formula Inspector */}
-          <div className="strategy-decision-box">
-            <div className="decision-header">
-              <span className="text-xs font-mono uppercase text-gray-400">Autonomous Agent Strategy Formula</span>
-              <span className={`pill ${shouldEnter ? "pill-ok" : "pill-warn"}`}>
-                {shouldEnter ? "DECISION: ENTER POSITION" : "DECISION: HOLD POSITION"}
+          <div style={{ marginTop: "0.75rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <button type="button" className="vp-icon-btn" onClick={() => setShowPayload((v) => !v)}>
+              {showPayload ? "Hide Contract Payload" : "Inspect Contract Call JSON"}
+            </button>
+            {quoteResult?.quote?.minAmountOut && (
+              <span className="mono" style={{ fontSize: "0.72rem", color: "var(--emerald-bright)" }}>
+                Live MinOut: {formatAmount(quoteResult.quote.minAmountOut)}
               </span>
-            </div>
-
-            <div className="formula-display">
-              <code>
-                Net Spread ({netSpreadBps} bps) = External APY ({externalApyBps} bps) - NEAR APY ({nearApyBps} bps) - Annualized Cost ({annualizedCostBps} bps)
-              </code>
-            </div>
-
-            <div className="decision-metrics-row">
-              <div>
-                <span className="stat-label">Gross Spread</span>
-                <strong>+{externalApyBps - nearApyBps} bps (+{( (externalApyBps - nearApyBps) / 100).toFixed(1)}%)</strong>
-              </div>
-              <div>
-                <span className="stat-label">One-Way Swap Cost</span>
-                <span className="mono">{costBps} bps</span>
-              </div>
-              <div>
-                <span className="stat-label">Required Min Spread</span>
-                <span className="mono">{minSpreadBps} bps</span>
-              </div>
-              <div>
-                <span className="stat-label">Calculated Net Spread</span>
-                <strong className={netSpreadBps >= minSpreadBps ? "text-emerald-600 dark:text-emerald-400 font-mono" : "text-amber-600 dark:text-amber-400 font-mono"}>
-                  {netSpreadBps} bps ({netSpreadBps >= minSpreadBps ? "Spread Cleared" : "Too Low"})
-                </strong>
-              </div>
-            </div>
-
-            <div style={{ marginTop: "1rem" }}>
-              <button
-                type="button"
-                className="button button-ghost button-sm"
-                onClick={() => setShowPayload(!showPayload)}
-              >
-                {showPayload ? "Hide Agent Contract Payload" : "Inspect Agent Contract Payload (rebalance_out)"}
-              </button>
-            </div>
-
-            {showPayload && (
-              <pre className="payload-preview-code">
-                {JSON.stringify(mockPayload, null, 2)}
-              </pre>
             )}
           </div>
         </div>
+      </div>
+
+      {showPayload && (
+        <pre
+          className="mono"
+          style={{
+            marginTop: "0.85rem",
+            padding: "0.85rem",
+            borderRadius: "8px",
+            background: "var(--surface-inset)",
+            border: "1px solid var(--border)",
+            fontSize: "0.72rem",
+            color: "var(--emerald-bright)",
+            overflowX: "auto",
+          }}
+        >
+          {JSON.stringify(mockPayload, null, 2)}
+        </pre>
       )}
     </section>
   );
 }
-

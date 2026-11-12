@@ -1,35 +1,49 @@
 import { useNear } from "../providers/NearProvider.js";
 import { shorten } from "../lib/vault.js";
+import { DEMO_OWNER } from "../lib/demo.js";
+import { WalletIcon } from "./Icons.js";
 
-export function WalletBar() {
+export function WalletBar({ demoMode = false }: { demoMode?: boolean }) {
   const { accountId, connecting, connectError, connect, disconnect } = useNear();
 
   if (accountId) {
     return (
-      <div className="wallet-bar">
-        <span className="chip chip-account" title={accountId}>
-          {shorten(accountId, 12, 8)}
-        </span>
-        <button className="button button-ghost" onClick={() => void disconnect().catch(() => undefined)}>
-          Disconnect
+      <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
+        <button
+          type="button"
+          className="vp-wallet-pill"
+          onClick={() => void disconnect().catch(() => undefined)}
+          title={`Connected: ${accountId} (Click to disconnect)`}
+        >
+          <WalletIcon width={14} height={14} style={{ color: "var(--muted)" }} />
+          <span>{shorten(accountId, 14, 7)}</span>
         </button>
       </div>
     );
   }
 
   return (
-    <div className="wallet-bar wallet-bar-stack">
+    <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
       <button
-        className="button button-primary"
+        type="button"
+        className="vp-wallet-pill"
         onClick={() => void connect().catch(() => undefined)}
         disabled={connecting}
+        title={demoMode ? "Preview account (click to connect NEAR wallet)" : "Connect NEAR wallet"}
       >
-        {connecting ? "Connecting" : "Connect wallet"}
+        <WalletIcon width={14} height={14} style={{ color: "var(--muted)" }} />
+        <span>
+          {connecting
+            ? "Connecting..."
+            : demoMode
+            ? shorten(DEMO_OWNER, 14, 7)
+            : "Connect Wallet"}
+        </span>
       </button>
       {connectError && (
-        <p className="form-error wallet-error" role="alert">
-          {connectError}
-        </p>
+        <span className="vp-badge vp-badge-red" role="alert" title={connectError}>
+          Wallet Err
+        </span>
       )}
     </div>
   );
