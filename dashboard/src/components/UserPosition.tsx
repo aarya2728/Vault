@@ -36,28 +36,36 @@ function transactionHash(result: TransactionResult): string | null {
 export function UserPosition({
   summary,
   onRefreshed,
+  onDemoMutate,
   demo = false,
 }: {
   summary: VaultSummary;
   onRefreshed: () => void;
+  onDemoMutate?: (delta: {
+    deltaAssets?: bigint;
+    deltaShares?: bigint;
+    deltaQueuedShares?: bigint;
+  }) => void;
   demo?: boolean;
 }) {
-  const { accountId, callMethod } = useNear();
+  const { accountId, isDemoWallet, callMethod } = useNear();
+  const isSimulated = demo || isDemoWallet || !config.vaultContract;
+
   const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
-  const [tokenBalance, setTokenBalance] = useState<bigint | null>(null);
-  const [shares, setShares] = useState<bigint | null>(null);
-  const [queuedWithdrawal, setQueuedWithdrawal] = useState<QueuedWithdrawal | null>(null);
+  const [tokenBalance, setTokenBalance] = useState<bigint | null>(18_420_000_000n);
+  const [shares, setShares] = useState<bigint | null>(75_000_000_000n);
+  const [queuedWithdrawal, setQueuedWithdrawal] = useState<QueuedWithdrawal | null>(
+    DEMO_QUEUED_WITHDRAWAL,
+  );
   const [pending, setPending] = useState<"deposit" | "withdraw" | "queue" | "claim" | "cancel" | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [txError, setTxError] = useState<string | null>(null);
+  const [txNotice, setTxNotice] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [amountInput, setAmountInput] = useState("5000");
 
   const load = useCallback(async () => {
-    if (demo) {
-      setTokenBalance(18_420_000_000n);
-      setShares(75_000_000_000n);
-      setQueuedWithdrawal(DEMO_QUEUED_WITHDRAWAL);
+    if (isSimulated) {
       setReadError(null);
       return;
     }
@@ -75,7 +83,7 @@ export function UserPosition({
     } catch (cause) {
       setReadError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [accountId, demo, summary.token]);
+  }, [accountId, isSimulated, summary.token]);
 
   useEffect(() => {
     void load();
@@ -111,19 +119,37 @@ export function UserPosition({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setTxError(null);
+    setTxNotice(null);
     setTxHash(null);
 
+    if (parsedInput <= 0n) {
+      setTxError("Enter an amount greater than zero.");
+      return;
+    }
+
     if (mode === "deposit") {
-      if (demo) {
-        setTxError("Demo mode preview: connect a NEAR wallet & configure VITE_VAULT_CONTRACT to deposit on-chain.");
-        return;
-      }
-      if (parsedInput <= 0n) {
-        setTxError("Enter an amount greater than zero.");
-        return;
-      }
       if (tokenBalance !== null && parsedInput > tokenBalance) {
         setTxError(`Amount exceeds your ${symbol} balance.`);
+        return;
+      }
+
+      if (isSimulated) {
+        const minted = sharesForAssets(parsedInput, totalAssets, totalShares);
+        setPending("deposit");
+        setTimeout(() => {
+          setTokenBalance((prev) => (prev ?? 0n) - parsedInput);
+          setShares((prev) => (prev ?? 0n) + minted);
+          onDemoMutate?.({ deltaAssets: parsedInput, deltaShares: minted });
+          setTxNotice(
+            `Simulated deposit confirmed: +${formatPrettyAmount(minted)} VP-${symbol} minted (${accountId ?? "demo session"})`,
+          );
+          setPending(null);
+        }, 300);
+        return;
+      }
+
+      if (!accountId) {
+        setTxError("Connect your NEAR wallet in the top-right bar to sign on-chain.");
         return;
       }
       if (!config.vaultContract) {
@@ -168,16 +194,8 @@ export function UserPosition({
       return;
     }
 
-    if (demo) {
-      setTxError("Demo mode preview: connect a NEAR wallet & configure VITE_VAULT_CONTRACT to withdraw on-chain.");
-      return;
-    }
-    if (!accountId || !config.vaultContract) {
-      setTxError("Connect a wallet first.");
-      return;
-    }
-    if (parsedInput <= 0n || shares === null || shares <= 0n) {
-      setTxError("Enter a valid amount to withdraw.");
+    if (shares === null || shares <= 0n) {
+      setTxError("No vault shares available to withdraw.");
       return;
     }
 
@@ -186,6 +204,25 @@ export function UserPosition({
     const sharesToBurn = requested > shares ? shares : requested;
     if (sharesToBurn <= 0n) {
       setTxError("Amount is too small to withdraw.");
+      return;
+    }
+
+    if (isSimulated) {
+      setPending("withdraw");
+      setTimeout(() => {
+        setShares((prev) => (prev ?? 0n) - sharesToBurn);
+        setTokenBalance((prev) => (prev ?? 0n) + parsedInput);
+        onDemoMutate?.({ deltaAssets: -parsedInput, deltaShares: -sharesToBurn });
+        setTxNotice(
+          `Simulated withdrawal confirmed: +${formatPrettyAmount(parsedInput)} ${symbol} returned to wallet`,
+        );
+        setPending(null);
+      }, 300);
+      return;
+    }
+
+    if (!accountId || !config.vaultContract) {
+      setTxError("Connect your NEAR wallet first.");
       return;
     }
 
@@ -221,36 +258,47 @@ export function UserPosition({
 
   async function handleQueueWithdrawal() {
     setTxError(null);
+    setTxNotice(null);
     setTxHash(null);
 
-    if (demo) {
-      setPending("queue");
-      setTimeout(() => {
-        const sharesToQueue =
-          parsedInput > 0n
-            ? sharesForAssets(parsedInput, totalAssets, totalShares)
-            : 12_500_000_000n;
-        setQueuedWithdrawal({
-          account_id: "demo-user.testnet",
-          shares: sharesToQueue.toString(),
-          requested_at_ms: Date.now(),
-          epoch: summary.current_epoch ?? 4,
-          status: "pending",
-          assets_allocated: "0",
-        });
-        setPending(null);
-      }, 350);
-      return;
-    }
-
-    if (!accountId || !config.vaultContract || shares === null || shares <= 0n || parsedInput <= 0n) {
-      setTxError("Connect a wallet with vault shares first.");
+    if (shares === null || shares <= 0n) {
+      setTxError("No vault shares available to queue.");
       return;
     }
 
     const requested =
       parsedInput >= positionValue ? shares : sharesForAssets(parsedInput, totalAssets, totalShares);
     const sharesToQueue = requested > shares ? shares : requested;
+    if (sharesToQueue <= 0n) {
+      setTxError("Enter a valid amount to queue.");
+      return;
+    }
+
+    if (isSimulated) {
+      setPending("queue");
+      setTimeout(() => {
+        setShares((prev) => (prev ?? 0n) - sharesToQueue);
+        setQueuedWithdrawal({
+          account_id: accountId ?? "roundvest2883.testnet",
+          shares: sharesToQueue.toString(),
+          requested_at_ms: Date.now(),
+          epoch: summary.current_epoch ?? 4,
+          status: "pending",
+          assets_allocated: "0",
+        });
+        onDemoMutate?.({ deltaQueuedShares: sharesToQueue });
+        setTxNotice(
+          `Queued ${formatPrettyAmount(sharesToQueue)} VP-${symbol} into Epoch #${summary.current_epoch ?? 4} Redemption Queue`,
+        );
+        setPending(null);
+      }, 300);
+      return;
+    }
+
+    if (!accountId || !config.vaultContract) {
+      setTxError("Connect your NEAR wallet first.");
+      return;
+    }
 
     setPending("queue");
     try {
@@ -274,15 +322,24 @@ export function UserPosition({
 
   async function handleClaimWithdrawal() {
     setTxError(null);
+    setTxNotice(null);
     setTxHash(null);
 
-    if (demo) {
+    if (isSimulated) {
       setPending("claim");
       setTimeout(() => {
+        const claimedAssets = queuedEstAssets;
+        const claimedShares = queuedSharesVal;
         setQueuedWithdrawal(null);
-        setTokenBalance((prev) => (prev ?? 0n) + 12_844_990_000n);
+        setTokenBalance((prev) => (prev ?? 0n) + claimedAssets);
+        onDemoMutate?.({
+          deltaAssets: -claimedAssets,
+          deltaShares: -claimedShares,
+          deltaQueuedShares: -claimedShares,
+        });
+        setTxNotice(`Claimed ${formatPrettyAmount(claimedAssets)} ${symbol} from Epoch queue.`);
         setPending(null);
-      }, 350);
+      }, 300);
       return;
     }
 
@@ -317,14 +374,21 @@ export function UserPosition({
 
   async function handleCancelWithdrawal() {
     setTxError(null);
+    setTxNotice(null);
     setTxHash(null);
 
-    if (demo) {
+    if (isSimulated) {
       setPending("cancel");
       setTimeout(() => {
+        const restoredShares = queuedSharesVal;
+        setShares((prev) => (prev ?? 0n) + restoredShares);
         setQueuedWithdrawal(null);
+        onDemoMutate?.({ deltaQueuedShares: -restoredShares });
+        setTxNotice(
+          `Cancelled queue ticket; ${formatPrettyAmount(restoredShares)} VP-${symbol} restored.`,
+        );
         setPending(null);
-      }, 350);
+      }, 300);
       return;
     }
 
@@ -401,6 +465,7 @@ export function UserPosition({
             onClick={() => {
               setMode("deposit");
               setTxError(null);
+              setTxNotice(null);
             }}
           >
             Deposit
@@ -411,6 +476,7 @@ export function UserPosition({
             onClick={() => {
               setMode("withdraw");
               setTxError(null);
+              setTxNotice(null);
             }}
           >
             Withdraw
@@ -473,7 +539,13 @@ export function UserPosition({
                   ? "Redemption Path"
                   : "Est. Assets Returned"}
               </span>
-              <span className="mono" style={{ color: withdrawExceedsIdle ? "var(--amber-bright)" : "var(--emerald-bright)", fontWeight: 600 }}>
+              <span
+                className="mono"
+                style={{
+                  color: withdrawExceedsIdle ? "var(--amber-bright)" : "var(--emerald-bright)",
+                  fontWeight: 600,
+                }}
+              >
                 {mode === "deposit"
                   ? `${formatPrettyAmount(estimatedSharesOut)} VP-${symbol}`
                   : withdrawExceedsIdle
@@ -516,8 +588,24 @@ export function UserPosition({
           )}
         </form>
 
-        {readError && !demo && <p className="vp-alert-error">RPC Read failed: {readError}</p>}
+        {readError && !isSimulated && <p className="vp-alert-error">RPC Read failed: {readError}</p>}
         {txError && <p className="vp-alert-error">{txError}</p>}
+        {txNotice && (
+          <div
+            className="mono"
+            style={{
+              marginTop: "0.75rem",
+              padding: "0.6rem 0.8rem",
+              borderRadius: "7px",
+              background: "var(--emerald-bg)",
+              border: "1px solid var(--emerald-border)",
+              color: "var(--emerald-bright)",
+              fontSize: "0.73rem",
+            }}
+          >
+            {txNotice}
+          </div>
+        )}
         {txHash && (
           <p className="mono" style={{ fontSize: "0.72rem", color: "var(--emerald-bright)", marginTop: "0.65rem" }}>
             Tx confirmed:{" "}

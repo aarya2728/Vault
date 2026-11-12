@@ -16,19 +16,23 @@ export type TransactionResult = Awaited<ReturnType<NearWalletBase["signAndSendTr
 
 const connector = new NearConnector({
   network: config.network === "mainnet" ? "mainnet" : "testnet",
+  providers: {
+    testnet: [config.rpcUrl || "https://rpc.testnet.near.org"],
+    mainnet: ["https://rpc.mainnet.near.org"],
+  },
   features: { signAndSendTransaction: true },
-  // The EVM-on-NEAR executor requires a popup, a chain switch, and a sponsored
-  // onboarding transaction. Keep the vault demo on NEAR-native wallets.
   excludedWallets: ["ethereum-wallets"],
   logger: {
     log: (...args: unknown[]) => console.debug("[near-connect]", ...args),
   },
 });
 
+const DEMO_WALLET_KEY = "vp-demo-wallet-account";
+
 function describeError(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string" && error) return error;
-  return "Wallet connection failed. Check the popup and try again.";
+  return "Wallet connection failed. Check popup permissions or try another NEAR wallet.";
 }
 
 export interface CallMethodParams {
@@ -41,9 +45,12 @@ export interface CallMethodParams {
 
 interface NearContextValue {
   accountId: string | null;
+  isDemoWallet: boolean;
   connecting: boolean;
   connectError: string | null;
+  clearConnectError: () => void;
   connect: () => Promise<void>;
+  connectDemoWallet: (account?: string) => void;
   disconnect: () => Promise<void>;
   callMethod: (params: CallMethodParams) => Promise<TransactionResult>;
 }
@@ -51,14 +58,29 @@ interface NearContextValue {
 const NearContext = createContext<NearContextValue | null>(null);
 
 export function NearProvider({ children }: { children: ReactNode }) {
-  const [accountId, setAccountIdState] = useState<string | null>(null);
+  const [accountId, setAccountIdState] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(DEMO_WALLET_KEY);
+  });
+  const [isDemoWallet, setIsDemoWallet] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return Boolean(localStorage.getItem(DEMO_WALLET_KEY));
+  });
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
-  const accountIdRef = useRef<string | null>(null);
+  const accountIdRef = useRef<string | null>(accountId);
 
-  const setAccountId = useCallback((next: string | null) => {
+  const setAccountId = useCallback((next: string | null, demo = false) => {
     accountIdRef.current = next;
     setAccountIdState(next);
+    setIsDemoWallet(demo && Boolean(next));
+    if (typeof window !== "undefined") {
+      if (demo && next) {
+        localStorage.setItem(DEMO_WALLET_KEY, next);
+      } else {
+        localStorage.removeItem(DEMO_WALLET_KEY);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -67,18 +89,24 @@ export function NearProvider({ children }: { children: ReactNode }) {
     connector
       .getConnectedWallet()
       .then(({ accounts }) => {
-        if (!cancelled) setAccountId(accounts[0]?.accountId ?? null);
+        const realId = accounts[0]?.accountId ?? null;
+        if (!cancelled && realId) {
+          setAccountId(realId, false);
+        }
       })
       .catch(() => {
-        if (!cancelled) setAccountId(null);
+        // Keep simulated wallet if saved; otherwise stay disconnected
       });
 
     const onSignIn = (payload: EventMap["wallet:signIn"]) => {
-      setAccountId(payload.accounts[0]?.accountId ?? null);
-      setConnectError(null);
+      const realId = payload.accounts[0]?.accountId ?? null;
+      if (realId) {
+        setAccountId(realId, false);
+        setConnectError(null);
+      }
     };
     const onSignOut = () => {
-      setAccountId(null);
+      setAccountId(null, false);
     };
 
     connector.on("wallet:signIn", onSignIn);
@@ -89,12 +117,13 @@ export function NearProvider({ children }: { children: ReactNode }) {
       connector.off("wallet:signIn", onSignIn);
       connector.off("wallet:signOut", onSignOut);
     };
-  }, []);
+  }, [setAccountId]);
 
   const connect = useCallback(async () => {
     setConnecting(true);
     setConnectError(null);
     try {
+      await connector.whenManifestLoaded.catch(() => undefined);
       const wallet = await connector.connect();
       let accounts: Awaited<ReturnType<typeof wallet.getAccounts>> = [];
       try {
@@ -104,27 +133,42 @@ export function NearProvider({ children }: { children: ReactNode }) {
       }
       const nextAccountId = accounts[0]?.accountId ?? null;
       if (nextAccountId) {
-        setAccountId(nextAccountId);
+        setAccountId(nextAccountId, false);
       } else if (!accountIdRef.current) {
         throw new Error(
-          "The wallet approved the request but returned no account. Pick a NEAR wallet (Meteor, HOT, Nightly, or MyNearWallet) and try again.",
+          "Wallet approved the request but returned no account. On testnet, Meteor, Intear, or Nightly wallets are supported.",
         );
       }
     } catch (error) {
-      setConnectError(describeError(error));
+      const msg = describeError(error);
+      setConnectError(msg);
       throw error;
     } finally {
       setConnecting(false);
     }
   }, [setAccountId]);
 
+  const connectDemoWallet = useCallback(
+    (account = "roundvest2883.testnet") => {
+      const trimmed = account.trim() || "roundvest2883.testnet";
+      setConnectError(null);
+      setAccountId(trimmed, true);
+    },
+    [setAccountId],
+  );
+
   const disconnect = useCallback(async () => {
     try {
-      await connector.disconnect();
+      if (!isDemoWallet) {
+        await connector.disconnect().catch(() => undefined);
+      }
     } finally {
-      setAccountId(null);
+      setAccountId(null, false);
+      setConnectError(null);
     }
-  }, [setAccountId]);
+  }, [isDemoWallet, setAccountId]);
+
+  const clearConnectError = useCallback(() => setConnectError(null), []);
 
   const callMethod = useCallback(
     async ({
@@ -134,6 +178,11 @@ export function NearProvider({ children }: { children: ReactNode }) {
       gas = "100000000000000",
       deposit = "0",
     }: CallMethodParams) => {
+      if (isDemoWallet) {
+        throw new Error(
+          "Connected with simulated wallet. Connect a real NEAR wallet (Meteor, Intear, Nightly) and set VITE_VAULT_CONTRACT to sign on-chain.",
+        );
+      }
       const wallet = await connector.wallet();
       return wallet.signAndSendTransaction({
         receiverId: contractId,
@@ -145,19 +194,39 @@ export function NearProvider({ children }: { children: ReactNode }) {
         ],
       });
     },
-    [],
+    [isDemoWallet],
   );
 
   const value = useMemo(
-    () => ({ accountId, connecting, connectError, connect, disconnect, callMethod }),
-    [accountId, connecting, connectError, connect, disconnect, callMethod],
+    () => ({
+      accountId,
+      isDemoWallet,
+      connecting,
+      connectError,
+      clearConnectError,
+      connect,
+      connectDemoWallet,
+      disconnect,
+      callMethod,
+    }),
+    [
+      accountId,
+      isDemoWallet,
+      connecting,
+      connectError,
+      clearConnectError,
+      connect,
+      connectDemoWallet,
+      disconnect,
+      callMethod,
+    ],
   );
 
   return <NearContext.Provider value={value}>{children}</NearContext.Provider>;
 }
 
 export function useNear(): NearContextValue {
-  const context = useContext(NearContext);
-  if (!context) throw new Error("useNear must be used inside NearProvider");
-  return context;
+  const ctx = useContext(NearContext);
+  if (!ctx) throw new Error("useNear must be used inside NearProvider");
+  return ctx;
 }

@@ -35,8 +35,8 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     if (!config.vaultContract) {
-      setSummary(DEMO_SUMMARY);
-      setRecords(DEMO_RECORDS);
+      setSummary((current) => current ?? DEMO_SUMMARY);
+      setRecords((current) => (current.length > 0 ? current : DEMO_RECORDS));
       setDemoMode(true);
       setError(null);
       setSyncMs(18);
@@ -57,6 +57,29 @@ export default function App() {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }, []);
+
+  const handleDemoMutate = useCallback(
+    (delta: { deltaAssets?: bigint; deltaShares?: bigint; deltaQueuedShares?: bigint }) => {
+      setSummary((current) => {
+        if (!current) return current;
+        const dAssets = delta.deltaAssets ?? 0n;
+        const dShares = delta.deltaShares ?? 0n;
+        const dQueued = delta.deltaQueuedShares ?? 0n;
+        const nextTotalAssets = BigInt(current.total_assets) + dAssets;
+        const nextIdleAssets = BigInt(current.idle_assets) + dAssets;
+        const nextTotalShares = BigInt(current.total_shares) + dShares;
+        const nextQueuedShares = BigInt(current.queued_shares ?? 0) + dQueued;
+        return {
+          ...current,
+          total_assets: (nextTotalAssets > 0n ? nextTotalAssets : 0n).toString(),
+          idle_assets: (nextIdleAssets > 0n ? nextIdleAssets : 0n).toString(),
+          total_shares: (nextTotalShares > 0n ? nextTotalShares : 0n).toString(),
+          queued_shares: (nextQueuedShares > 0n ? nextQueuedShares : 0n).toString(),
+        };
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     void refresh();
@@ -148,7 +171,12 @@ export default function App() {
               <>
                 <VaultDashboardHero summary={summary} />
                 <div className="vp-grid-2">
-                  <UserPosition summary={summary} onRefreshed={refresh} demo={demoMode} />
+                  <UserPosition
+                    summary={summary}
+                    onRefreshed={refresh}
+                    onDemoMutate={handleDemoMutate}
+                    demo={demoMode}
+                  />
                   <div className="vp-col-stack">
                     <ActiveMoveCard
                       summary={summary}

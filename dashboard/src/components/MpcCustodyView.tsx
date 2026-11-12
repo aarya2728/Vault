@@ -563,3 +563,4 @@ export function MpcCustodyView({ summary, onRefresh, demo = false }: MpcCustodyV
     </div>
   );
 }
+
